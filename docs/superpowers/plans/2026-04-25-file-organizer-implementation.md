@@ -6,7 +6,7 @@
 
 **Architecture:** Three layers — a headless Node 22 + TypeScript engine, a single SQLite catalog, and a Preact + Vite UI served by the engine on `127.0.0.1`. Monorepo via npm workspaces. Test-driven throughout. Frequent commits. No premature abstraction.
 
-**Tech Stack:** Node 22 LTS, TypeScript, npm workspaces, `better-sqlite3`, `Hono` (HTTP+WS), `node:crypto`, `node:worker_threads`, `exifr`, `mediainfo` (subprocess), `sharp`, `vitest`, Preact, `vite`, `tsx`, `esbuild`.
+**Tech Stack:** Node 22 or 24 LTS (24 recommended), TypeScript, npm workspaces, `better-sqlite3`, `Hono` (HTTP+WS), `node:crypto`, `node:worker_threads`, `exifr`, `mediainfo` (subprocess), `sharp`, `vitest`, Preact, `vite`, `tsx`, `esbuild`.
 
 **Spec reference:** Every section of this plan refers back to `docs/superpowers/specs/2026-04-25-file-organizer-design.md` (referred to as "the spec" below). The spec is authoritative; this plan is the execution path.
 
@@ -33,7 +33,7 @@ You **MUST** follow these rules without exception. They replace the discipline t
 
 If the plan does not specify something:
 
-- **Library version:** use the latest stable major version compatible with Node 22 LTS unless the plan pins a version. Record the chosen version in `package.json` and don't change it later in the project unless a security advisory forces an upgrade.
+- **Library version:** use the latest stable major version compatible with Node 22 or 24 LTS (24 recommended) unless the plan pins a version. Record the chosen version in `package.json` and don't change it later in the project unless a security advisory forces an upgrade.
 - **Code style:** match the surrounding code in the file you are editing. If the file is new, follow the conventions in §0.6.
 - **File location for a new helper:** put it in the same package as its consumer. Do not create new packages or top-level directories beyond the layout in §M0.4.
 - **Error message wording:** prefer concrete, action-oriented messages ("catalog file at <path> is locked by another process; close other FileOrganizer instances and retry") over generic ones ("error").
@@ -334,7 +334,7 @@ docs/superpowers/specs/2026-04-25-file-organizer-design.md
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22 <23"
+    "node": ">=22"
   },
   "workspaces": [
     "packages/shared",
@@ -533,7 +533,7 @@ Task: M0-T05"
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit"
   }
 }
@@ -572,7 +572,7 @@ export {};
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
     "start": "tsx src/cli/index.ts serve"
   },
@@ -615,7 +615,7 @@ export {};
   "scripts": {
     "build": "vite build",
     "dev": "vite",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -1341,7 +1341,7 @@ Task: M1-T03"
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
     "start": "tsx src/cli/index.ts serve"
   },
@@ -5080,7 +5080,7 @@ Task: M3-T02"
   "scripts": {
     "build": "vite build",
     "dev": "vite",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -10273,7 +10273,7 @@ A local tool to organize personal files (photos, videos, documents) across multi
 
 ## Install (Windows-targeted, runs on POSIX too)
 
-Requires Node 22 LTS and git.
+Requires Node 22 or 24 LTS (24 recommended) and git.
 
 ```
 git clone <this-repo>

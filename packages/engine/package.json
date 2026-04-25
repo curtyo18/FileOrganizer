@@ -1,0 +1,19 @@
+{
+  "name": "@fileorganizer/engine",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "fileorganizer": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit",
+    "start": "tsx src/cli/index.ts serve"
+  },
+  "dependencies": {
+    "@fileorganizer/shared": "*"
+  }
+}
