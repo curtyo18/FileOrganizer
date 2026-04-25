@@ -2490,6 +2490,7 @@ function formatBytes(bytes: number): string {
 
 ```ts
 #!/usr/bin/env node
+import { pathToFileURL } from 'node:url';
 import { defaultPointerPath } from '../catalog/locator.js';
 import { runInit } from './init.js';
 import { runStatus, formatStatus } from './status.js';
@@ -2569,7 +2570,8 @@ export async function runCli(argv: string[]): Promise<CliResult> {
   }
 }
 
-const isMain = import.meta.url === `file://${process.argv[1]}`;
+const entryArg = process.argv[1];
+const isMain = entryArg ? import.meta.url === pathToFileURL(entryArg).href : false;
 if (isMain) {
   runCli(process.argv.slice(2)).then((r) => {
     if (r.stdout) process.stdout.write(r.stdout + '\n');
