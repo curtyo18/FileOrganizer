@@ -1,0 +1,34 @@
+# dependencies
+node_modules/
+**/node_modules/
+
+# build outputs
+dist/
+**/dist/
+*.tsbuildinfo
+
+# editor & OS
+.DS_Store
+.vscode/
+.idea/
+Thumbs.db
+
+# environment
+.env
+.env.local
+
+# runtime data (must never be committed)
+catalog.db
+catalog.db-journal
+catalog.db-wal
+catalog.db-shm
+logs/
+thumbnails-cache/
+
+# bundled binaries (fetched at install time)
+packages/engine/bin/mediainfo*
+packages/engine/bin/ffprobe*
+
+# notes that the cloud agent may write
+docs/superpowers/notes-from-implementation.md
+docs/superpowers/blockers.md
