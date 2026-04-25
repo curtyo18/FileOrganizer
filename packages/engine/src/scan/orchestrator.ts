@@ -1,0 +1,164 @@
+import type { Catalog } from '../catalog/connection.js';
+import { FilesRepo } from '../catalog/files-repo.js';
+import { ScansRepo } from '../catalog/scans-repo.js';
+import { walk } from './walker.js';
+import { hashFile } from './hasher.js';
+import { extractImageMetadata } from './metadata-image.js';
+import { extractVideoMetadata } from './metadata-video.js';
+import { resolveFileDate } from './date-resolver.js';
+import { DEFAULT_EXCLUDED_NAMES } from './exclusions.js';
+import {
+  categoryForExtension,
+  type CategoryMap,
+} from '@fileorganizer/shared';
+import type { ThrottleManager } from '../throttle/manager.js';
+import type { Logger } from '../log.js';
+
+export interface RunScanOptions {
+  db: Catalog;
+  driveId: string;
+  roots: string[];
+  categoryMap: CategoryMap;
+  throttle: ThrottleManager;
+  log: Logger;
+  mediainfoPath: string;
+  extraExcluded?: readonly string[];
+}
+
+export interface RunScanResult {
+  scanId: string;
+  filesSeen: number;
+  filesIndexed: number;
+  filesUnchanged: number;
+  filesSkipped: number;
+  errors: number;
+}
+
+export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
+  const filesRepo = new FilesRepo(opts.db);
+  const scansRepo = new ScansRepo(opts.db);
+  const scan = scansRepo.start({
+    driveId: opts.driveId,
+    rootPaths: opts.roots,
+    throttleProfile: opts.throttle.current().name,
+  });
+  const log = opts.log.child({ scanId: scan.id });
+  log.info('scan-started', { roots: opts.roots });
+
+  const allowedExtensions = collectAllowedExtensions(opts.categoryMap);
+  let filesSeen = 0;
+  let filesIndexed = 0;
+  let filesUnchanged = 0;
+  let filesSkipped = 0;
+  let errors = 0;
+  let bytesProcessed = 0;
+  let lastDir: string | null = null;
+
+  try {
+    const walker = walk({
+      roots: opts.roots,
+      extensions: allowedExtensions,
+      excluded: DEFAULT_EXCLUDED_NAMES,
+      extraExcluded: opts.extraExcluded ?? [],
+    });
+
+    for await (const entry of walker) {
+      filesSeen += 1;
+      const dirPart = entry.path.slice(0, entry.path.length - entry.name.length);
+      if (dirPart !== lastDir) {
+        lastDir = dirPart;
+        scansRepo.updateProgress(scan.id, {
+          lastCompletedDirectory: lastDir,
+          filesSeen,
+          filesIndexed,
+          filesSkipped,
+          bytesProcessed,
+        });
+      }
+      const category = categoryForExtension(opts.categoryMap, entry.extension);
+      if (!category) {
+        filesSkipped += 1;
+        continue;
+      }
+      try {
+        const qc = filesRepo.quickCheck(opts.driveId, entry.path, entry.sizeBytes, entry.mtime);
+        if (qc.kind === 'skip') {
+          filesRepo.bumpLastVerified(qc.fileId, scan.id);
+          filesUnchanged += 1;
+          continue;
+        }
+        const profile = opts.throttle.current();
+        const sha = await hashFile(entry.path, {
+          chunkBytes: profile.readChunkBytes,
+          sleepMs: profile.interChunkSleepMs,
+        });
+        bytesProcessed += entry.sizeBytes;
+        let exifDate: string | null = null;
+        let width: number | null = null;
+        let height: number | null = null;
+        let durationSeconds: number | null = null;
+        if (category === 'image') {
+          const m = await extractImageMetadata(entry.path);
+          exifDate = m.exifDate;
+          width = m.width;
+          height = m.height;
+        } else if (category === 'video') {
+          const m = await extractVideoMetadata(entry.path, { binaryPath: opts.mediainfoPath });
+          exifDate = m.exifDate;
+          width = m.width;
+          height = m.height;
+          durationSeconds = m.durationSeconds;
+        }
+        const resolved = resolveFileDate({ exifDate, mtime: entry.mtime });
+        filesRepo.upsertOne({
+          driveId: opts.driveId,
+          path: entry.path,
+          name: entry.name,
+          extension: entry.extension,
+          sizeBytes: entry.sizeBytes,
+          category,
+          sha256: sha,
+          mtime: entry.mtime,
+          ctime: entry.ctime,
+          exifDate: resolved.source === 'exif' ? resolved.date : null,
+          dateSource: resolved.source,
+          width,
+          height,
+          durationSeconds,
+          ntfsFileId: null,
+          state: 'indexed',
+          scanId: scan.id,
+        });
+        filesIndexed += 1;
+      } catch (err) {
+        errors += 1;
+        log.warn('file-error', { path: entry.path, err: (err as Error).message });
+      }
+    }
+
+    filesRepo.markMissing(opts.driveId, scan.id);
+    scansRepo.updateProgress(scan.id, {
+      lastCompletedDirectory: lastDir,
+      filesSeen,
+      filesIndexed,
+      filesSkipped,
+      bytesProcessed,
+    });
+    scansRepo.finish(scan.id, 'completed', { errors });
+    log.info('scan-completed', { filesIndexed, filesUnchanged, filesSkipped, errors });
+  } catch (err) {
+    scansRepo.finish(scan.id, 'failed', { errors });
+    log.error('scan-failed', { err: (err as Error).message });
+    throw err;
+  }
+
+  return { scanId: scan.id, filesSeen, filesIndexed, filesUnchanged, filesSkipped, errors };
+}
+
+function collectAllowedExtensions(map: CategoryMap): ReadonlySet<string> {
+  const exts = new Set<string>();
+  for (const list of Object.values(map)) {
+    for (const ext of list) exts.add(ext.toLowerCase());
+  }
+  return exts;
+}
