@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
     "start": "tsx src/cli/index.ts serve"
   },

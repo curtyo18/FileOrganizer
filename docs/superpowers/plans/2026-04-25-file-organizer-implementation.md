@@ -533,7 +533,7 @@ Task: M0-T05"
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit"
   }
 }
@@ -572,7 +572,7 @@ export {};
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
     "start": "tsx src/cli/index.ts serve"
   },
@@ -615,7 +615,7 @@ export {};
   "scripts": {
     "build": "vite build",
     "dev": "vite",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -1341,7 +1341,7 @@ Task: M1-T03"
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
     "start": "tsx src/cli/index.ts serve"
   },
@@ -5080,7 +5080,7 @@ Task: M3-T02"
   "scripts": {
     "build": "vite build",
     "dev": "vite",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
