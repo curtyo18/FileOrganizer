@@ -3,6 +3,8 @@ import { pathToFileURL } from 'node:url';
 import { defaultPointerPath } from '../catalog/locator.js';
 import { runInit } from './init.js';
 import { runStatus, formatStatus } from './status.js';
+import { runScanCli } from './scan.js';
+import type { ThrottleProfileName } from '@fileorganizer/shared';
 
 export interface CliResult {
   exitCode: number;
@@ -57,6 +59,25 @@ export async function runCli(argv: string[]): Promise<CliResult> {
         stdout.push(formatStatus(result));
         return { exitCode: 0, stdout: stdout.join('\n'), stderr: stderr.join('\n') };
       }
+      case 'scan': {
+        const root = flags['path'];
+        if (!root) {
+          stderr.push('scan requires --path <directory>');
+          return { exitCode: 1, stdout: stdout.join('\n'), stderr: stderr.join('\n') };
+        }
+        const profile = (flags['profile'] as ThrottleProfileName | undefined) ?? 'balanced';
+        const mediainfoPath =
+          flags['mediainfo'] ??
+          (process.platform === 'win32'
+            ? `${process.cwd()}\\packages\\engine\\bin\\mediainfo.exe`
+            : `${process.cwd()}/packages/engine/bin/mediainfo`);
+        const result = await runScanCli({ pointerPath, rootPath: root, profile, mediainfoPath });
+        stdout.push(
+          `Scan ${result.scanId} complete:`,
+          `  indexed=${result.filesIndexed} unchanged=${result.filesUnchanged} skipped=${result.filesSkipped} errors=${result.errors}`,
+        );
+        return { exitCode: 0, stdout: stdout.join('\n'), stderr: stderr.join('\n') };
+      }
       case 'help':
       case '--help':
       case '-h': {
@@ -65,6 +86,7 @@ export async function runCli(argv: string[]): Promise<CliResult> {
           'Commands:',
           '  init --catalog <path> [--pointer <path>]',
           '  status [--pointer <path>]',
+          '  scan --path <dir> [--profile idle|balanced|full-send] [--mediainfo <path>] [--pointer <path>]',
         );
         return { exitCode: 0, stdout: stdout.join('\n'), stderr: stderr.join('\n') };
       }
