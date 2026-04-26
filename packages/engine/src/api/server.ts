@@ -114,15 +114,8 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
 
   app.get('/api/scans', (c) => {
     const driveId = c.req.query('driveId');
-    let rows;
-    if (driveId) {
-      rows = opts.db
-        .prepare(`SELECT * FROM scans WHERE drive_id = ? ORDER BY started_at DESC LIMIT 100`)
-        .all(driveId);
-    } else {
-      rows = opts.db.prepare(`SELECT * FROM scans ORDER BY started_at DESC LIMIT 100`).all();
-    }
-    return c.json({ scans: rows });
+    const list = driveId ? scans.list({ driveId }) : scans.list();
+    return c.json({ scans: list });
   });
 
   app.get('/api/files', (c) => {

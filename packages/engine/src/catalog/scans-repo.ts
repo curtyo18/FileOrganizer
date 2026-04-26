@@ -72,6 +72,18 @@ export class ScansRepo {
       | undefined;
     return row ? toRecord(row) : null;
   }
+
+  list(opts: { driveId?: string; limit?: number } = {}): ScanRecord[] {
+    const limit = opts.limit ?? 100;
+    const rows = (opts.driveId
+      ? this.db
+          .prepare(`SELECT * FROM scans WHERE drive_id = ? ORDER BY started_at DESC LIMIT ?`)
+          .all(opts.driveId, limit)
+      : this.db
+          .prepare(`SELECT * FROM scans ORDER BY started_at DESC LIMIT ?`)
+          .all(limit)) as Record<string, unknown>[];
+    return rows.map(toRecord);
+  }
 }
 
 function toRecord(row: Record<string, unknown>): ScanRecord {
