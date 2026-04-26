@@ -1,5 +1,9 @@
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
+import { serveStatic } from '@hono/node-server/serve-static';
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Catalog } from '../catalog/connection.js';
 import { DriveRepo } from '../drives/repo.js';
 import { ScansRepo } from '../catalog/scans-repo.js';
@@ -108,6 +112,12 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       .all(driveId, limit, offset);
     return c.json({ files: rows });
   });
+
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  const uiDist = join(__dirname, '..', '..', '..', 'ui', 'dist');
+  if (existsSync(uiDist)) {
+    app.get('*', serveStatic({ root: uiDist }));
+  }
 
   return new Promise((resolveServer) => {
     const server = serve(
