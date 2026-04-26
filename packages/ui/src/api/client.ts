@@ -1,5 +1,47 @@
 import type { DriveRecord } from '@fileorganizer/shared';
 
+export interface DuplicateCopyUI {
+  fileId: number;
+  driveId: string;
+  path: string;
+  sizeBytes: number;
+  category: string;
+  state: string;
+  mtime: string;
+}
+
+export interface DuplicateGroupUI {
+  sha256: string;
+  copies: DuplicateCopyUI[];
+  fileSizeBytes: number;
+  reclaimableBytes: number;
+}
+
+export interface DedupeOperation {
+  groupSha256: string;
+  keeperFileId: number;
+  removeFileId: number;
+  reasons: string[];
+  reclaimableBytes: number;
+}
+
+export interface DedupePlanResponse {
+  operations: DedupeOperation[];
+  groups: DuplicateGroupUI[];
+}
+
+export interface QuarantineEntryUI {
+  id: number;
+  driveId: string;
+  originalPath: string;
+  originalSize: number;
+  originalSha256: string;
+  originalMtime: string;
+  quarantinePath: string;
+  quarantinedAt: string;
+  batchId: string;
+}
+
 export interface ApiClientOptions {
   baseUrl: string;
 }
@@ -23,6 +65,47 @@ export class ApiClient {
     const q = driveId ? `?driveId=${encodeURIComponent(driveId)}` : '';
     const data = await this.get<{ scans: unknown[] }>(`/api/scans${q}`);
     return data.scans;
+  }
+
+  async listDuplicates(minSize = 1): Promise<DedupePlanResponse> {
+    return this.get<DedupePlanResponse>(`/api/duplicates?minSize=${minSize}`);
+  }
+
+  async applyDedupe(input: {
+    operations: DedupeOperation[];
+    driveRoots: Record<string, string>;
+  }): Promise<{ batchId: string; completed: number; failed: number; reclaimedBytes: number }> {
+    const res = await fetch(`${this.opts.baseUrl}/api/duplicates/apply`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) throw new Error(`apply failed: ${res.status}`);
+    return res.json() as Promise<{
+      batchId: string;
+      completed: number;
+      failed: number;
+      reclaimedBytes: number;
+    }>;
+  }
+
+  async listQuarantine(driveId?: string): Promise<QuarantineEntryUI[]> {
+    const q = driveId ? `?driveId=${encodeURIComponent(driveId)}` : '';
+    const data = await this.get<{ entries: QuarantineEntryUI[] }>(`/api/quarantine${q}`);
+    return data.entries;
+  }
+
+  async restoreQuarantine(input: {
+    quarantineIds: number[];
+    driveRoots: Record<string, string>;
+  }): Promise<{ restored: number; errors: string[] }> {
+    const res = await fetch(`${this.opts.baseUrl}/api/quarantine/restore`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) throw new Error(`restore failed: ${res.status}`);
+    return res.json() as Promise<{ restored: number; errors: string[] }>;
   }
 
   async startScan(input: {
