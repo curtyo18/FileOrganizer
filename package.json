@@ -16,7 +16,7 @@
     "test": "npm run test --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "start": "npm run start --workspace=engine",
+    "start": "npm run build --workspace=@fileorganizer/shared && npm run build --workspace=@fileorganizer/ui && npm run start --workspace=@fileorganizer/engine",
     "fetch-binaries": "tsx scripts/fetch-binaries.ts"
   },
   "devDependencies": {
