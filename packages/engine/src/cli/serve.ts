@@ -36,11 +36,13 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
   console.log('  Press Ctrl+C to stop.');
   console.log('');
 
-  const shutdown = async () => {
-    await server.close();
-    closeCatalog(db);
-    process.exit(0);
-  };
-  process.on('SIGINT', () => void shutdown());
-  process.on('SIGTERM', () => void shutdown());
+  await new Promise<void>((resolve) => {
+    const shutdown = async () => {
+      await server.close();
+      closeCatalog(db);
+      resolve();
+    };
+    process.on('SIGINT', () => void shutdown());
+    process.on('SIGTERM', () => void shutdown());
+  });
 }
