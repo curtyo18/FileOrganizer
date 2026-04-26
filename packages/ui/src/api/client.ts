@@ -19,6 +19,26 @@ export class ApiClient {
     return data.files;
   }
 
+  async listScans(driveId?: string): Promise<unknown[]> {
+    const q = driveId ? `?driveId=${encodeURIComponent(driveId)}` : '';
+    const data = await this.get<{ scans: unknown[] }>(`/api/scans${q}`);
+    return data.scans;
+  }
+
+  async startScan(input: { driveId: string; rootPaths: string[]; profile?: string }): Promise<unknown> {
+    const res = await fetch(`${this.opts.baseUrl}/api/scans`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`API /api/scans failed: ${res.status} ${body}`);
+    }
+    const data = (await res.json()) as { scan: unknown };
+    return data.scan;
+  }
+
   protected get baseUrl(): string {
     return this.opts.baseUrl;
   }

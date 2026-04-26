@@ -31,6 +31,35 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     if (!s) return c.json({ error: 'not-found' }, 404);
     return c.json({ scan: s });
   });
+  app.post('/api/scans', async (c) => {
+    const body = (await c.req.json()) as {
+      driveId: string;
+      rootPaths: string[];
+      profile?: 'idle' | 'balanced' | 'full-send';
+    };
+    const drive = drives.list().find((d) => d.id === body.driveId);
+    if (!drive) return c.json({ error: 'drive-not-found' }, 404);
+    const scan = scans.start({
+      driveId: body.driveId,
+      rootPaths: body.rootPaths,
+      throttleProfile: body.profile ?? 'balanced',
+    });
+    return c.json({ scan }, 201);
+  });
+
+  app.get('/api/scans', (c) => {
+    const driveId = c.req.query('driveId');
+    let rows;
+    if (driveId) {
+      rows = opts.db
+        .prepare(`SELECT * FROM scans WHERE drive_id = ? ORDER BY started_at DESC LIMIT 100`)
+        .all(driveId);
+    } else {
+      rows = opts.db.prepare(`SELECT * FROM scans ORDER BY started_at DESC LIMIT 100`).all();
+    }
+    return c.json({ scans: rows });
+  });
+
   app.get('/api/files', (c) => {
     const driveId = c.req.query('driveId');
     if (!driveId) return c.json({ error: 'driveId required' }, 400);
