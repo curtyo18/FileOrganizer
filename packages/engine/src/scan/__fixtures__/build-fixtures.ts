@@ -1,7 +1,5 @@
 import sharp from 'sharp';
 import { readFileSync, writeFileSync } from 'node:fs';
-// piexifjs has no type defs; ambient declaration is acceptable for a fixture helper.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 import piexif from 'piexifjs';
 
 export async function buildPlainJpeg(outPath: string): Promise<void> {

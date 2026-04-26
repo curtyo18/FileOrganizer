@@ -4,6 +4,7 @@ import { defaultPointerPath } from '../catalog/locator.js';
 import { runInit } from './init.js';
 import { runStatus, formatStatus } from './status.js';
 import { runScanCli } from './scan.js';
+import { runServe } from './serve.js';
 import type { ThrottleProfileName } from '@fileorganizer/shared';
 
 export interface CliResult {
@@ -59,6 +60,11 @@ export async function runCli(argv: string[]): Promise<CliResult> {
         stdout.push(formatStatus(result));
         return { exitCode: 0, stdout: stdout.join('\n'), stderr: stderr.join('\n') };
       }
+      case 'serve': {
+        const port = flags['port'] ? parseInt(flags['port']!, 10) : undefined;
+        await runServe({ pointerPath, ...(port !== undefined ? { port } : {}) });
+        return { exitCode: 0, stdout: stdout.join('\n'), stderr: stderr.join('\n') };
+      }
       case 'scan': {
         const root = flags['path'];
         if (!root) {
@@ -87,6 +93,7 @@ export async function runCli(argv: string[]): Promise<CliResult> {
           '  init --catalog <path> [--pointer <path>]',
           '  status [--pointer <path>]',
           '  scan --path <dir> [--profile idle|balanced|full-send] [--mediainfo <path>] [--pointer <path>]',
+          '  serve [--port <number>] [--pointer <path>]',
         );
         return { exitCode: 0, stdout: stdout.join('\n'), stderr: stderr.join('\n') };
       }
