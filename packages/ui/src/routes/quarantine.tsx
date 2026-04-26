@@ -52,17 +52,11 @@ export function Quarantine(_props: RoutableProps) {
     return [...ids];
   })();
 
-  const onRestore = () => {
-    if (selected.size === 0) return;
-    setShowRoots(true);
-  };
-
-  const onConfirmRoots = async (roots: Record<string, string>) => {
-    setShowRoots(false);
+  const doRestore = async (driveRoots: Record<string, string>) => {
     try {
       const result = await api.restoreQuarantine({
         quarantineIds: [...selected],
-        driveRoots: roots,
+        driveRoots,
       });
       setInfo(
         `Restored ${result.restored} file${result.restored === 1 ? '' : 's'}` +
@@ -73,6 +67,21 @@ export function Quarantine(_props: RoutableProps) {
     } catch (e) {
       setError((e as Error).message);
     }
+  };
+
+  const onRestore = async () => {
+    if (selected.size === 0) return;
+    const missingMounts = involvedDrives.filter((id) => !driveById.get(id)?.mountPath);
+    if (missingMounts.length > 0) {
+      setShowRoots(true);
+      return;
+    }
+    await doRestore({});
+  };
+
+  const onConfirmRoots = async (roots: Record<string, string>) => {
+    setShowRoots(false);
+    await doRestore(roots);
   };
 
   return (

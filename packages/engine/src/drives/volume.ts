@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { statfsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { resolve } from 'node:path';
+import { resolve, parse } from 'node:path';
 import type { DriveKind } from '@fileorganizer/shared';
 
 export interface VolumeInfo {
@@ -10,6 +10,7 @@ export interface VolumeInfo {
   freeBytes: number;
   kind: DriveKind;
   currentLetter: string | null;
+  mountPath: string;
 }
 
 export function detectVolume(path: string): VolumeInfo {
@@ -63,12 +64,14 @@ function detectWindows(abs: string): VolumeInfo {
     serial = synthSerial(abs);
   }
   const capacity = capacityFor(abs);
+  const mountPath = driveLetter ? `${driveLetter}:\\` : parse(abs).root || abs;
   return {
     volumeSerial: serial,
     totalBytes: capacity.total,
     freeBytes: capacity.free,
     kind,
     currentLetter: driveLetter ? `${driveLetter}:` : null,
+    mountPath,
   };
 }
 
@@ -80,6 +83,7 @@ function detectPosix(abs: string): VolumeInfo {
     freeBytes: capacity.free,
     kind: 'local',
     currentLetter: null,
+    mountPath: parse(abs).root || '/',
   };
 }
 

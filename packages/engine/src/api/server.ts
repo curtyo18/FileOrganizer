@@ -63,6 +63,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
         volumeSerial: volume.volumeSerial,
         label: volume.currentLetter ?? root,
         currentLetter: volume.currentLetter,
+        mountPath: volume.mountPath,
         kind: volume.kind,
         roles: drive?.roles ?? [],
         totalBytes: volume.totalBytes,
@@ -145,12 +146,13 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   app.post('/api/duplicates/apply', async (c) => {
     const body = (await c.req.json()) as {
       operations: DedupeOperation[];
-      driveRoots: Record<string, string>;
+      driveRoots?: Record<string, string>;
     };
+    const merged = mergeDriveRoots(drives, body.driveRoots ?? {});
     const result = await applyDedupe({
       db: opts.db,
       operations: body.operations,
-      driveRoots: new Map(Object.entries(body.driveRoots)),
+      driveRoots: merged,
     });
     events.publish({ type: 'batch-status', batchId: result.batchId, status: 'completed' });
     return c.json(result);
@@ -183,8 +185,10 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   app.post('/api/quarantine/restore', async (c) => {
     const body = (await c.req.json()) as {
       quarantineIds: number[];
-      driveRoots: Record<string, string>;
+      driveRoots?: Record<string, string>;
     };
+    const driveRoots = mergeDriveRoots(drives, body.driveRoots ?? {});
+    const rootLookup = (driveId: string): string | undefined => driveRoots.get(driveId);
     const errors: string[] = [];
     let restored = 0;
     for (const id of body.quarantineIds) {
@@ -197,7 +201,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
         errors.push(`${id} not found`);
         continue;
       }
-      const root = body.driveRoots[row.driveId];
+      const root = rootLookup(row.driveId);
       if (!root) {
         errors.push(`${id}: no driveRoot for ${row.driveId}`);
         continue;
@@ -241,4 +245,23 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       },
     );
   });
+}
+
+/**
+ * Build the driveId → root path map by combining the catalog's stored
+ * mount paths with anything the request explicitly provided.
+ * Caller-supplied values win, so a user can override a stale stored mount.
+ */
+function mergeDriveRoots(
+  drives: DriveRepo,
+  override: Record<string, string>,
+): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const d of drives.list()) {
+    if (d.mountPath) out.set(d.id, d.mountPath);
+  }
+  for (const [id, root] of Object.entries(override)) {
+    out.set(id, root);
+  }
+  return out;
 }

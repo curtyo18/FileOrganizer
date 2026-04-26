@@ -74,9 +74,21 @@ export function Duplicates(_props: DuplicatesProps) {
     return [...ids];
   })();
 
-  const onApprove = () => {
-    if (selectedOps.size === 0) return;
-    setShowRoots(true);
+  const onApprove = async () => {
+    if (selectedOps.size === 0 || !plan) return;
+    // Drives that don't have a stored mount path need a manual prompt.
+    const missingMounts = involvedDrives.filter((id) => !driveById.get(id)?.mountPath);
+    if (missingMounts.length > 0) {
+      setShowRoots(true);
+      return;
+    }
+    try {
+      const ops = plan.operations.filter((o) => selectedOps.has(o.removeFileId));
+      await api.applyDedupe({ operations: ops, driveRoots: {} });
+      reload();
+    } catch (e) {
+      setError((e as Error).message);
+    }
   };
 
   const onConfirmRoots = async (roots: Record<string, string>) => {

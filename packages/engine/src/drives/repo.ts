@@ -6,6 +6,7 @@ export interface UpsertDriveInput {
   volumeSerial: string;
   label: string;
   currentLetter: string | null;
+  mountPath?: string | null;
   kind: DriveKind;
   roles: string[];
   totalBytes: number;
@@ -21,14 +22,18 @@ export class DriveRepo {
       .get(input.volumeSerial) as Record<string, unknown> | undefined;
     const now = new Date().toISOString();
     if (existing) {
+      // Preserve an existing mount_path if the upsert call doesn't supply one.
+      const mountPath =
+        input.mountPath !== undefined ? input.mountPath : (existing['mount_path'] as string | null);
       this.db
         .prepare(
-          `UPDATE drives SET label = ?, current_letter = ?, kind = ?, roles = ?,
+          `UPDATE drives SET label = ?, current_letter = ?, mount_path = ?, kind = ?, roles = ?,
            total_bytes = ?, free_bytes = ?, last_seen_at = ? WHERE id = ?`,
         )
         .run(
           input.label,
           input.currentLetter,
+          mountPath,
           input.kind,
           JSON.stringify(input.roles),
           input.totalBytes,
@@ -41,14 +46,15 @@ export class DriveRepo {
     const id = randomUUID();
     this.db
       .prepare(
-        `INSERT INTO drives (id, volume_serial, label, current_letter, kind, roles,
-         total_bytes, free_bytes, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO drives (id, volume_serial, label, current_letter, mount_path, kind, roles,
+         total_bytes, free_bytes, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
         input.volumeSerial,
         input.label,
         input.currentLetter,
+        input.mountPath ?? null,
         input.kind,
         JSON.stringify(input.roles),
         input.totalBytes,
@@ -79,6 +85,7 @@ export class DriveRepo {
       volumeSerial: row['volume_serial'] as string,
       label: row['label'] as string,
       currentLetter: (row['current_letter'] as string | null) ?? null,
+      mountPath: (row['mount_path'] as string | null) ?? null,
       kind: row['kind'] as DriveKind,
       roles: JSON.parse((row['roles'] as string) || '[]') as string[],
       totalBytes: row['total_bytes'] as number,

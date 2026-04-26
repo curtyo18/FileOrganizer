@@ -42,6 +42,7 @@ export async function runScanCli(opts: ScanCliOptions): Promise<ScanCliResult> {
       volumeSerial: volume.volumeSerial,
       label: volume.currentLetter ?? root,
       currentLetter: volume.currentLetter,
+      mountPath: volume.mountPath,
       kind: volume.kind,
       roles: [],
       totalBytes: volume.totalBytes,

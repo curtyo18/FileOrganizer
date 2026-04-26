@@ -56,6 +56,7 @@ export interface DriveRecord {
   volumeSerial: string;
   label: string;
   currentLetter: string | null;
+  mountPath: string | null;
   kind: DriveKind;
   roles: string[];
   totalBytes: number;
