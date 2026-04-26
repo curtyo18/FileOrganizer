@@ -42,3 +42,12 @@ export function defaultPointerPath(): string {
   const home = process.env['HOME'] ?? process.cwd();
   return `${home}/.fileorganizer/catalog-location.json`;
 }
+
+export function defaultCatalogPath(): string {
+  const appData = process.env['APPDATA'];
+  if (appData) {
+    return `${appData}\\FileOrganizer\\catalog.db`;
+  }
+  const home = process.env['HOME'] ?? process.cwd();
+  return `${home}/.fileorganizer/catalog.db`;
+}

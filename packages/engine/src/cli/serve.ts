@@ -1,8 +1,8 @@
-import { readPointer, writePointer } from '../catalog/locator.js';
+import { readPointer, writePointer, defaultCatalogPath } from '../catalog/locator.js';
 import { openCatalog, closeCatalog } from '../catalog/connection.js';
 import { migrate } from '../catalog/migrate.js';
+import { SettingsRepo } from '../catalog/settings-repo.js';
 import { createServer } from '../api/server.js';
-import { CatalogError } from '@fileorganizer/shared';
 
 export interface ServeCliOptions {
   pointerPath: string;
@@ -10,17 +10,31 @@ export interface ServeCliOptions {
 }
 
 export async function runServe(opts: ServeCliOptions): Promise<void> {
-  const ptr = readPointer(opts.pointerPath);
+  let ptr = readPointer(opts.pointerPath);
   if (!ptr) {
-    throw new CatalogError('POINTER_MISSING', `no catalog pointer at ${opts.pointerPath}`);
+    const catalogPath = defaultCatalogPath();
+    console.log(`No catalog pointer at ${opts.pointerPath}. Creating one with default catalog at ${catalogPath}.`);
+    const initDb = openCatalog(catalogPath);
+    try {
+      migrate(initDb);
+      new SettingsRepo(initDb).load();
+    } finally {
+      closeCatalog(initDb);
+    }
+    writePointer(opts.pointerPath, { catalogPath, uiPort: 0 });
+    ptr = { catalogPath, uiPort: 0 };
   }
   const db = openCatalog(ptr.catalogPath);
   migrate(db);
   const server = await createServer({ db, port: opts.port ?? 0, hostname: '127.0.0.1' });
   writePointer(opts.pointerPath, { catalogPath: ptr.catalogPath, uiPort: server.port });
-  console.log(`Engine listening on http://127.0.0.1:${server.port}`);
-  console.log(`Catalog: ${ptr.catalogPath}`);
-  console.log('Press Ctrl+C to stop.');
+  const url = `http://127.0.0.1:${server.port}`;
+  console.log('');
+  console.log('  FileOrganizer is ready');
+  console.log(`  Open ${url} in your browser`);
+  console.log(`  Catalog: ${ptr.catalogPath}`);
+  console.log('  Press Ctrl+C to stop.');
+  console.log('');
 
   const shutdown = async () => {
     await server.close();
