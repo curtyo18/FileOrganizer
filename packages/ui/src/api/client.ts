@@ -25,7 +25,12 @@ export class ApiClient {
     return data.scans;
   }
 
-  async startScan(input: { driveId: string; rootPaths: string[]; profile?: string }): Promise<unknown> {
+  async startScan(input: {
+    driveId?: string;
+    rootPath?: string;
+    rootPaths?: string[];
+    profile?: string;
+  }): Promise<unknown> {
     const res = await fetch(`${this.opts.baseUrl}/api/scans`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
