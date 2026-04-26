@@ -1,44 +1,322 @@
 import { useEffect, useState } from 'preact/hooks';
 import type { RoutableProps } from 'preact-router';
+import { route } from 'preact-router';
+import type { DriveRecord, ScanRecord } from '@fileorganizer/shared';
 import { defaultApiClient } from '../api/client.js';
-import type { DriveRecord } from '@fileorganizer/shared';
+import { Icon, driveIconName } from '../components/icon.js';
+import {
+  formatBytes,
+  formatNum,
+  driveColor,
+  driveLetter,
+  fillPercent,
+  relativeTime,
+} from '../lib/format.js';
 
-export function Dashboard(_props: RoutableProps) {
-  const api = defaultApiClient();
-  const [drives, setDrives] = useState<DriveRecord[]>([]);
-  const [error, setError] = useState<string | null>(null);
+interface ActionCardProps {
+  kind: 'ok' | 'warn' | 'info' | 'danger' | 'muted';
+  title: string;
+  sub: string;
+  cta: string;
+  href: string;
+}
 
-  useEffect(() => {
-    api.listDrives().then(setDrives).catch((e) => setError((e as Error).message));
-  }, []);
-
+function ActionCard({ kind, title, sub, cta, href }: ActionCardProps) {
   return (
-    <div>
-      <h1>Dashboard</h1>
-      {error ? <div class="card">Error: {error}</div> : null}
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px">
-        {drives.map((d) => {
-          const usedPct = d.totalBytes > 0 ? Math.round(((d.totalBytes - d.freeBytes) / d.totalBytes) * 100) : 0;
-          return (
-            <div class="card" key={d.id}>
-              <h3>{d.label}</h3>
-              <div class="muted">{d.currentLetter ?? '—'} · {d.kind}</div>
-              <div style="margin-top:8px" class="fill-bar"><div style={`width:${usedPct}%`}></div></div>
-              <div class="muted" style="margin-top:4px">{usedPct}% used · {formatBytes(d.freeBytes)} free</div>
-              <div class="muted" style="margin-top:8px">Roles: {d.roles.join(', ') || '—'}</div>
-            </div>
-          );
-        })}
+    <div class="card" style={{ padding: 12, position: 'relative' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+        <span class={`dot ${kind}`} style={{ marginTop: 5 }} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{title}</div>
+          <div style={{ fontSize: 11, color: 'var(--fg-2)' }}>{sub}</div>
+        </div>
       </div>
-      {drives.length === 0 ? <div class="card muted">No drives yet. Run a scan from the CLI or Scans page.</div> : null}
+      <button
+        class="btn sm"
+        style={{ marginTop: 10, width: '100%', justifyContent: 'center' }}
+        onClick={() => route(href)}
+      >
+        {cta} →
+      </button>
     </div>
   );
 }
 
-function formatBytes(n: number): string {
-  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let i = 0;
-  let v = n;
-  while (v >= 1024 && i < u.length - 1) { v /= 1024; i += 1; }
-  return `${v.toFixed(1)} ${u[i]}`;
+function DriveRow({ d }: { d: DriveRecord }) {
+  const pct = fillPercent(d.totalBytes, d.freeBytes);
+  const usedBytes = Math.max(0, d.totalBytes - d.freeBytes);
+  const ltr = driveLetter(d.currentLetter, d.label.charAt(0).toUpperCase());
+  const color = driveColor(d.currentLetter ?? d.label);
+  const status = 'ok';
+  return (
+    <div
+      style={{
+        padding: '10px 10px',
+        display: 'grid',
+        gridTemplateColumns: '32px 1fr auto auto',
+        gap: 12,
+        alignItems: 'center',
+        borderRadius: 4,
+      }}
+    >
+      <div
+        class="drive-glyph"
+        style={{
+          borderColor: color,
+          color: color,
+          borderLeft: `3px solid ${color}`,
+        }}
+      >
+        <Icon name={driveIconName(d.kind)} size={13} />
+      </div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+          <span class={`dot ${status}`} />
+          <span style={{ fontWeight: 500, fontSize: 12 }}>{d.label}</span>
+          <span class="mono" style={{ color: 'var(--fg-3)' }}>{d.currentLetter ?? ltr}</span>
+          <span style={{ fontSize: 10, color: 'var(--fg-2)' }}>· {d.kind}</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div class="bar" style={{ flex: 1, maxWidth: 280 }}>
+            <i
+              style={{
+                width: pct + '%',
+                background: pct > 90 ? 'var(--danger)' : pct > 75 ? 'var(--warn)' : color,
+              }}
+            />
+          </div>
+          <span
+            class="mono tnum"
+            style={{ fontSize: 10.5, color: 'var(--fg-2)', minWidth: 130, textAlign: 'right' }}
+          >
+            {formatBytes(usedBytes)} / {formatBytes(d.totalBytes)}
+          </span>
+        </div>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
+        {d.roles.slice(0, 2).map((r) => (
+          <span key={r} class="pill" style={{ fontSize: 9.5 }}>{r}</span>
+        ))}
+        {d.roles.length > 2 && (
+          <span style={{ fontSize: 9.5, color: 'var(--fg-3)' }}>+{d.roles.length - 2}</span>
+        )}
+        {d.roles.length === 0 && (
+          <span style={{ fontSize: 9.5, color: 'var(--fg-3)' }}>no roles</span>
+        )}
+      </div>
+      <div style={{ fontSize: 10, color: 'var(--fg-2)', textAlign: 'right' }}>
+        <div class="label-cap" style={{ marginBottom: 2, fontSize: 9 }}>seen</div>
+        <div class="mono">{relativeTime(d.lastSeenAt)}</div>
+      </div>
+    </div>
+  );
+}
+
+interface ActivityRow {
+  scanId: string;
+  startedAt: string;
+  status: string;
+  filesIndexed: number;
+  driveLabel: string;
+}
+
+function ActivityFeed({ scans, drives }: { scans: ScanRecord[]; drives: DriveRecord[] }) {
+  const recent = scans.slice(0, 12);
+  const driveById = new Map(drives.map((d) => [d.id, d]));
+
+  return (
+    <div class="card" style={{ display: 'flex', flexDirection: 'column' }}>
+      <div class="card-hd">
+        <Icon name="history" />
+        <span>Activity</span>
+        {scans.some((s) => s.status === 'running') ? (
+          <span class="dot scanning" style={{ marginLeft: 4 }} />
+        ) : null}
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 10, color: 'var(--fg-2)' }}>
+          {scans.length === 0 ? 'no activity' : 'last 12'}
+        </span>
+      </div>
+      <div style={{ padding: '4px 0', flex: 1, overflowY: 'auto' }}>
+        {recent.length === 0 ? (
+          <div style={{ padding: '20px 14px', color: 'var(--fg-3)', fontSize: 11.5 }}>
+            Run a scan to see activity here.
+          </div>
+        ) : (
+          recent.map((s, i) => {
+            const drive = driveById.get(s.driveId);
+            const kindPill =
+              s.status === 'completed'
+                ? { bg: 'oklch(0.78 0.13 155 / 0.14)', fg: 'var(--ok)', text: 'COMPLETED' }
+                : s.status === 'running'
+                  ? { bg: 'var(--accent-bg)', fg: 'var(--accent)', text: 'SCAN' }
+                  : s.status === 'failed'
+                    ? { bg: 'oklch(0.70 0.18 25 / 0.14)', fg: 'var(--danger)', text: 'FAILED' }
+                    : { bg: 'var(--bg-3)', fg: 'var(--fg-1)', text: s.status.toUpperCase() };
+            return (
+              <div
+                key={s.id}
+                style={{
+                  padding: '8px 14px',
+                  display: 'grid',
+                  gridTemplateColumns: 'auto auto 1fr',
+                  gap: 10,
+                  alignItems: 'baseline',
+                  borderBottom: i < recent.length - 1 ? '1px solid var(--line)' : 'none',
+                }}
+              >
+                <span class="mono" style={{ color: 'var(--fg-3)', fontSize: 10 }}>
+                  {relativeTime(s.startedAt)}
+                </span>
+                <span
+                  class="pill"
+                  style={{
+                    background: kindPill.bg,
+                    color: kindPill.fg,
+                    fontSize: 9.5,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                  }}
+                >
+                  {kindPill.text}
+                </span>
+                <span style={{ fontSize: 11.5, color: 'var(--fg-1)' }}>
+                  {drive?.label ?? s.driveId.slice(0, 8) + '…'}
+                  {s.progress?.filesIndexed ? (
+                    <span class="mono tnum" style={{ color: 'var(--fg-3)', marginLeft: 6 }}>
+                      {formatNum(s.progress.filesIndexed)} indexed
+                    </span>
+                  ) : null}
+                </span>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CategoryBreakdown({ totalFiles, totalBytes }: { totalFiles: number; totalBytes: number }) {
+  return (
+    <div class="card">
+      <div class="card-hd">
+        <Icon name="rules" />
+        <span>Library by category</span>
+        <span class="pill">
+          {formatNum(totalFiles)} files · {formatBytes(totalBytes)}
+        </span>
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 10, color: 'var(--fg-3)' }}>category breakdown coming in M5</span>
+      </div>
+      <div style={{ padding: 14 }}>
+        <div class="seg-bar" style={{ marginBottom: 12, opacity: 0.4 }}>
+          <span style={{ width: '100%', background: 'var(--bg-3)' }} />
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--fg-3)' }}>
+          Run a scan first; once per-category aggregates are computed they'll appear here.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function Dashboard(_props: RoutableProps) {
+  const api = defaultApiClient();
+  const [drives, setDrives] = useState<DriveRecord[]>([]);
+  const [scans, setScans] = useState<ScanRecord[]>([]);
+  const [fileSummary, setFileSummary] = useState<{ count: number; bytes: number }>({ count: 0, bytes: 0 });
+
+  const reload = () => {
+    api.listDrives().then(setDrives).catch(() => {});
+    api.listScans().then((s) => setScans(s as ScanRecord[])).catch(() => {});
+  };
+
+  useEffect(() => {
+    reload();
+    const interval = window.setInterval(reload, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Approximate library size from drive used totals (placeholder until we have a /api/summary).
+  useEffect(() => {
+    const bytes = drives.reduce((acc, d) => acc + Math.max(0, d.totalBytes - d.freeBytes), 0);
+    setFileSummary({ count: 0, bytes });
+  }, [drives]);
+
+  return (
+    <div
+      style={{
+        padding: 16,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 14,
+        height: '100%',
+        overflowY: 'auto',
+      }}
+    >
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+        <ActionCard
+          kind="muted"
+          title="Duplicates"
+          sub="dedup ships in M4"
+          cta="Open"
+          href="/duplicates"
+        />
+        <ActionCard
+          kind="muted"
+          title="Organize plan"
+          sub="rules ship in M5"
+          cta="Open"
+          href="/organize"
+        />
+        <ActionCard
+          kind="info"
+          title="Scan a drive"
+          sub="paste any folder path"
+          cta="Open"
+          href="/scans"
+        />
+        <ActionCard
+          kind="ok"
+          title="Browse catalog"
+          sub={drives.length > 0 ? `${drives.length} drives indexed` : 'no drives yet'}
+          cta="Open"
+          href="/browse"
+        />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 14, minHeight: 0 }}>
+        <div class="card" style={{ display: 'flex', flexDirection: 'column' }}>
+          <div class="card-hd">
+            <Icon name="drive" />
+            <span>Drives</span>
+            <span class="pill">{drives.length}</span>
+            <div style={{ flex: 1 }} />
+            <button
+              class="btn sm ghost"
+              onClick={() => route('/scans')}
+              title="Add a drive by scanning a folder on it"
+            >
+              <Icon name="plus" size={11} /> Add
+            </button>
+          </div>
+          <div style={{ padding: 4 }}>
+            {drives.length === 0 ? (
+              <div style={{ padding: '20px 14px', color: 'var(--fg-3)', fontSize: 11.5 }}>
+                No drives registered yet. Go to{' '}
+                <a href="/scans" onClick={(e) => { e.preventDefault(); route('/scans'); }} style={{ color: 'var(--accent)' }}>Scans</a>
+                {' '}and paste a folder path to add your first drive.
+              </div>
+            ) : (
+              drives.map((d) => <DriveRow key={d.id} d={d} />)
+            )}
+          </div>
+        </div>
+        <ActivityFeed scans={scans} drives={drives} />
+      </div>
+
+      <CategoryBreakdown totalFiles={fileSummary.count} totalBytes={fileSummary.bytes} />
+    </div>
+  );
 }

@@ -1,22 +1,64 @@
+import { useEffect, useState } from 'preact/hooks';
 import { Router, Route } from 'preact-router';
+import type { DriveRecord, ScanRecord } from '@fileorganizer/shared';
+import { Sidebar } from './components/sidebar.js';
+import { TopBar } from './components/topbar.js';
+import { defaultApiClient } from './api/client.js';
 import { Dashboard } from './routes/dashboard.js';
 import { Drives } from './routes/drives.js';
 import { Scans } from './routes/scans.js';
 import { Browse } from './routes/browse.js';
-import { Sidebar } from './components/sidebar.js';
+import { Duplicates } from './routes/duplicates.js';
+import { Organize } from './routes/organize.js';
+import { History } from './routes/history.js';
+import { Quarantine } from './routes/quarantine.js';
+
+function pathToSection(path: string): string {
+  const seg = path.replace(/^\//, '').split('/')[0] || 'dashboard';
+  return seg;
+}
 
 export function App() {
+  const api = defaultApiClient();
+  const [section, setSection] = useState<string>(pathToSection(window.location.pathname));
+  const [drives, setDrives] = useState<DriveRecord[]>([]);
+  const [scans, setScans] = useState<ScanRecord[]>([]);
+
+  const reloadGlobal = () => {
+    api.listDrives().then(setDrives).catch(() => {});
+    api.listScans().then((s) => setScans(s as ScanRecord[])).catch(() => {});
+  };
+
+  useEffect(() => {
+    reloadGlobal();
+    const interval = window.setInterval(reloadGlobal, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const scanIsLive = scans.some((s) => s.status === 'running');
+
   return (
-    <div class="layout">
-      <Sidebar />
-      <main class="main">
-        <Router>
-          <Route path="/" component={Dashboard} />
-          <Route path="/drives" component={Drives} />
-          <Route path="/scans" component={Scans} />
-          <Route path="/browse" component={Browse} />
-        </Router>
-      </main>
+    <div class="fo-root">
+      <Sidebar
+        active={section}
+        driveCount={drives.length}
+        scanIsLive={scanIsLive}
+      />
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
+        <TopBar section={section} drives={drives} />
+        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+          <Router onChange={(e) => setSection(pathToSection(e.url))}>
+            <Route path="/" component={Dashboard} />
+            <Route path="/drives" component={Drives} />
+            <Route path="/scans" component={Scans} />
+            <Route path="/browse" component={Browse} />
+            <Route path="/duplicates" component={Duplicates} />
+            <Route path="/organize" component={Organize} />
+            <Route path="/history" component={History} />
+            <Route path="/quarantine" component={Quarantine} />
+          </Router>
+        </div>
+      </div>
     </div>
   );
 }
