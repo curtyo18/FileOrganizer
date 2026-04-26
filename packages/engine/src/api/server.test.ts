@@ -24,6 +24,33 @@ afterEach(async () => {
 });
 
 describe('API server scans endpoint', () => {
+  it('scans a brand-new path, auto-registering the drive (UI-friendly flow)', async () => {
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    const dataDir = join(dir, 'fresh-scan');
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, 'a.jpg'), 'aaa');
+    const post = await fetch(`http://127.0.0.1:${handle.port}/api/scans`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rootPath: dataDir, profile: 'idle' }),
+    });
+    expect(post.status).toBe(201);
+    const { scan } = (await post.json()) as { scan: { id: string; driveId: string } };
+    expect(scan.driveId).toBeTruthy();
+    for (let i = 0; i < 50; i += 1) {
+      const got = await fetch(`http://127.0.0.1:${handle.port}/api/scans/${scan.id}`);
+      const body = (await got.json()) as { scan: { status: string } };
+      if (body.scan.status === 'completed') {
+        const drivesRes = await fetch(`http://127.0.0.1:${handle.port}/api/drives`);
+        const drivesBody = (await drivesRes.json()) as { drives: Array<{ id: string }> };
+        expect(drivesBody.drives.length).toBeGreaterThan(0);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    throw new Error('scan did not complete in time');
+  });
+
   it('starts a scan via POST /api/scans and reaches completion', async () => {
     const { mkdirSync, writeFileSync } = await import('node:fs');
     const dataDir = join(dir, 'data');

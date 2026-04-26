@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Catalog } from '../catalog/connection.js';
 import { DriveRepo } from '../drives/repo.js';
@@ -10,6 +10,7 @@ import { ScansRepo } from '../catalog/scans-repo.js';
 import { SettingsRepo } from '../catalog/settings-repo.js';
 import { ThrottleManager } from '../throttle/manager.js';
 import { runScan } from '../scan/orchestrator.js';
+import { detectVolume } from '../drives/volume.js';
 import { createLogger, defaultWriter } from '../log.js';
 import { EventBus } from './events.js';
 
@@ -41,13 +42,39 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   });
   app.post('/api/scans', async (c) => {
     const body = (await c.req.json()) as {
-      driveId: string;
-      rootPaths: string[];
+      driveId?: string;
+      rootPath?: string;
+      rootPaths?: string[];
       profile?: 'idle' | 'balanced' | 'full-send';
       mediainfoPath?: string;
     };
-    const drive = drives.list().find((d) => d.id === body.driveId);
-    if (!drive) return c.json({ error: 'drive-not-found' }, 404);
+
+    // Resolve drive: either by explicit driveId, or by discovering it from rootPath.
+    let drive = body.driveId ? drives.list().find((d) => d.id === body.driveId) ?? null : null;
+    let roots: string[];
+    if (body.rootPath) {
+      const root = resolve(body.rootPath);
+      if (!existsSync(root)) return c.json({ error: 'path-not-found', path: root }, 400);
+      const volume = detectVolume(root);
+      drive = drives.upsert({
+        volumeSerial: volume.volumeSerial,
+        label: volume.currentLetter ?? root,
+        currentLetter: volume.currentLetter,
+        kind: volume.kind,
+        roles: drive?.roles ?? [],
+        totalBytes: volume.totalBytes,
+        freeBytes: volume.freeBytes,
+      });
+      roots = [root];
+    } else if (drive) {
+      if (!body.rootPaths || body.rootPaths.length === 0) {
+        return c.json({ error: 'rootPaths required when starting from existing driveId' }, 400);
+      }
+      roots = body.rootPaths;
+    } else {
+      return c.json({ error: 'either driveId+rootPaths or rootPath is required' }, 400);
+    }
+
     const settings = new SettingsRepo(opts.db).load();
     const throttle = new ThrottleManager(
       settings.throttleProfiles,
@@ -59,7 +86,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     const promise = runScan({
       db: opts.db,
       driveId: drive.id,
-      roots: body.rootPaths,
+      roots,
       categoryMap: settings.categoryMap,
       throttle,
       log,
