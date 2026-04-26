@@ -12,6 +12,9 @@ import { ThrottleManager } from '../throttle/manager.js';
 import { runScan } from '../scan/orchestrator.js';
 import { detectVolume } from '../drives/volume.js';
 import { createLogger, defaultWriter } from '../log.js';
+import { planDedupe, type DedupeOperation } from '../dedupe/planner.js';
+import { applyDedupe } from '../dedupe/applier.js';
+import { restoreFromQuarantine } from '../quarantine/quarantine.js';
 import { EventBus } from './events.js';
 
 export interface CreateServerOptions {
@@ -131,6 +134,85 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       )
       .all(driveId, limit, offset);
     return c.json({ files: rows });
+  });
+
+  app.get('/api/duplicates', (c) => {
+    const minSize = Math.max(parseInt(c.req.query('minSize') ?? '1', 10), 1);
+    const plan = planDedupe(opts.db, { minSizeBytes: minSize });
+    return c.json(plan);
+  });
+
+  app.post('/api/duplicates/apply', async (c) => {
+    const body = (await c.req.json()) as {
+      operations: DedupeOperation[];
+      driveRoots: Record<string, string>;
+    };
+    const result = await applyDedupe({
+      db: opts.db,
+      operations: body.operations,
+      driveRoots: new Map(Object.entries(body.driveRoots)),
+    });
+    events.publish({ type: 'batch-status', batchId: result.batchId, status: 'completed' });
+    return c.json(result);
+  });
+
+  app.get('/api/quarantine', (c) => {
+    const driveId = c.req.query('driveId');
+    const rows = driveId
+      ? opts.db
+          .prepare(
+            `SELECT id, drive_id AS driveId, original_path AS originalPath,
+                    original_size AS originalSize, original_sha256 AS originalSha256,
+                    original_mtime AS originalMtime, quarantine_path AS quarantinePath,
+                    quarantined_at AS quarantinedAt, batch_id AS batchId
+             FROM quarantine WHERE drive_id = ? ORDER BY quarantined_at DESC`,
+          )
+          .all(driveId)
+      : opts.db
+          .prepare(
+            `SELECT id, drive_id AS driveId, original_path AS originalPath,
+                    original_size AS originalSize, original_sha256 AS originalSha256,
+                    original_mtime AS originalMtime, quarantine_path AS quarantinePath,
+                    quarantined_at AS quarantinedAt, batch_id AS batchId
+             FROM quarantine ORDER BY quarantined_at DESC LIMIT 1000`,
+          )
+          .all();
+    return c.json({ entries: rows });
+  });
+
+  app.post('/api/quarantine/restore', async (c) => {
+    const body = (await c.req.json()) as {
+      quarantineIds: number[];
+      driveRoots: Record<string, string>;
+    };
+    const errors: string[] = [];
+    let restored = 0;
+    for (const id of body.quarantineIds) {
+      const row = opts.db
+        .prepare(
+          `SELECT drive_id AS driveId, original_path AS originalPath FROM quarantine WHERE id = ?`,
+        )
+        .get(id) as { driveId: string; originalPath: string } | undefined;
+      if (!row) {
+        errors.push(`${id} not found`);
+        continue;
+      }
+      const root = body.driveRoots[row.driveId];
+      if (!root) {
+        errors.push(`${id}: no driveRoot for ${row.driveId}`);
+        continue;
+      }
+      try {
+        restoreFromQuarantine({ db: opts.db, driveRoot: root, quarantineId: id });
+        opts.db
+          .prepare(`UPDATE files SET state = 'indexed' WHERE drive_id = ? AND path = ?`)
+          .run(row.driveId, row.originalPath);
+        restored += 1;
+      } catch (err) {
+        errors.push(`${id}: ${(err as Error).message}`);
+      }
+    }
+    return c.json({ restored, errors });
   });
 
   const __dirname = dirname(fileURLToPath(import.meta.url));
