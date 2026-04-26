@@ -53,6 +53,10 @@ export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
   let errors = 0;
   let bytesProcessed = 0;
   let lastDir: string | null = null;
+  let lastProgressAt = Date.now();
+  const PROGRESS_INTERVAL_MS = 1000;
+  const PROGRESS_FILE_CADENCE = 50;
+  let filesSinceProgress = 0;
 
   try {
     const walker = walk({
@@ -62,18 +66,30 @@ export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
       extraExcluded: opts.extraExcluded ?? [],
     });
 
+    const flushProgress = () => {
+      scansRepo.updateProgress(scan.id, {
+        lastCompletedDirectory: lastDir,
+        filesSeen,
+        filesIndexed,
+        filesSkipped,
+        bytesProcessed,
+      });
+      lastProgressAt = Date.now();
+      filesSinceProgress = 0;
+    };
+
     for await (const entry of walker) {
       filesSeen += 1;
+      filesSinceProgress += 1;
       const dirPart = entry.path.slice(0, entry.path.length - entry.name.length);
-      if (dirPart !== lastDir) {
-        lastDir = dirPart;
-        scansRepo.updateProgress(scan.id, {
-          lastCompletedDirectory: lastDir,
-          filesSeen,
-          filesIndexed,
-          filesSkipped,
-          bytesProcessed,
-        });
+      const dirChanged = dirPart !== lastDir;
+      if (dirChanged) lastDir = dirPart;
+      if (
+        dirChanged ||
+        filesSinceProgress >= PROGRESS_FILE_CADENCE ||
+        Date.now() - lastProgressAt >= PROGRESS_INTERVAL_MS
+      ) {
+        flushProgress();
       }
       const category = categoryForExtension(opts.categoryMap, entry.extension);
       if (!category) {

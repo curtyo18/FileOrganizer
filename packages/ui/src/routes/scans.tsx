@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useState, useRef } from 'preact/hooks';
 import type { RoutableProps } from 'preact-router';
 import { defaultApiClient } from '../api/client.js';
 import type { DriveRecord, ScanRecord } from '@fileorganizer/shared';
@@ -13,18 +13,43 @@ export function Scans(_props: RoutableProps) {
   const [profile, setProfile] = useState<'idle' | 'balanced' | 'full-send'>('balanced');
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const pollTimer = useRef<number | null>(null);
 
-  const reload = () => {
-    Promise.all([api.listDrives(), api.listScans()])
-      .then(([d, s]) => {
-        setDrives(d);
-        setScans(s as ScanRecord[]);
-        if (!driveId && d.length > 0) setDriveId(d[0]!.id);
-      })
-      .catch((e) => setError((e as Error).message));
+  const reload = async () => {
+    try {
+      const [d, s] = await Promise.all([api.listDrives(), api.listScans()]);
+      setDrives(d);
+      setScans(s as ScanRecord[]);
+      if (!driveId && d.length > 0) setDriveId(d[0]!.id);
+      return s as ScanRecord[];
+    } catch (e) {
+      setError((e as Error).message);
+      return [];
+    }
   };
 
-  useEffect(reload, []);
+  useEffect(() => {
+    reload();
+    return () => {
+      if (pollTimer.current !== null) {
+        clearInterval(pollTimer.current);
+        pollTimer.current = null;
+      }
+    };
+  }, []);
+
+  // While any scan is running or paused, poll every 1.5s.
+  useEffect(() => {
+    const anyActive = scans.some((s) => s.status === 'running' || s.status === 'paused');
+    if (anyActive && pollTimer.current === null) {
+      pollTimer.current = window.setInterval(() => {
+        reload();
+      }, 1500);
+    } else if (!anyActive && pollTimer.current !== null) {
+      clearInterval(pollTimer.current);
+      pollTimer.current = null;
+    }
+  }, [scans]);
 
   const onStart = async () => {
     setError(null);
@@ -49,12 +74,14 @@ export function Scans(_props: RoutableProps) {
       await api.startScan({ rootPath: pathInput.trim(), profile });
       setInfo(`Scan started for ${pathInput.trim()}`);
       setPathInput('');
-      // Give the scan a moment to register the drive before reloading.
       setTimeout(reload, 200);
     } catch (e) {
       setError((e as Error).message);
     }
   };
+
+  const activeScans = scans.filter((s) => s.status === 'running' || s.status === 'paused');
+  const completedScans = scans.filter((s) => s.status !== 'running' && s.status !== 'paused');
 
   return (
     <div>
@@ -104,20 +131,46 @@ export function Scans(_props: RoutableProps) {
       {error ? <div class="card" style="color:var(--danger)">{error}</div> : null}
       {info ? <div class="card muted">{info}</div> : null}
 
+      {activeScans.length > 0 ? (
+        <div class="card">
+          <h2>Active scans <span class="muted" style="font-size:0.7em">(updating live)</span></h2>
+          {activeScans.map((s) => (
+            <div key={s.id} style="margin-bottom:12px">
+              <div>
+                <strong>{s.rootPaths.join(', ') || s.driveId.slice(0, 8) + '…'}</strong>
+                <span class="muted"> · {s.status} · {s.throttleProfile}</span>
+              </div>
+              <div class="muted">
+                {s.progress?.filesSeen ?? 0} files seen ·{' '}
+                {s.progress?.filesIndexed ?? 0} indexed ·{' '}
+                {s.progress?.filesSkipped ?? 0} skipped ·{' '}
+                {formatBytes(s.progress?.bytesProcessed ?? 0)} processed
+              </div>
+              {s.progress?.lastCompletedDirectory ? (
+                <div class="muted" style="font-size:0.85em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                  in: {s.progress.lastCompletedDirectory}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+
       <div class="card">
         <h2>Recent scans</h2>
-        {scans.length === 0 ? <p class="muted">No scans yet.</p> : (
+        {completedScans.length === 0 ? <p class="muted">No completed scans yet.</p> : (
           <table>
             <thead>
-              <tr><th>Started</th><th>Drive</th><th>Status</th><th>Files</th></tr>
+              <tr><th>Started</th><th>Drive</th><th>Status</th><th>Files indexed</th><th>Errors</th></tr>
             </thead>
             <tbody>
-              {scans.map((s) => (
+              {completedScans.map((s) => (
                 <tr key={s.id}>
-                  <td>{s.startedAt}</td>
+                  <td>{formatTime(s.startedAt)}</td>
                   <td>{s.driveId.slice(0, 8)}…</td>
                   <td>{s.status}</td>
                   <td>{s.progress?.filesIndexed ?? 0}</td>
+                  <td>{s.stats?.errors ?? 0}</td>
                 </tr>
               ))}
             </tbody>
@@ -126,4 +179,21 @@ export function Scans(_props: RoutableProps) {
       </div>
     </div>
   );
+}
+
+function formatBytes(n: number): string {
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i += 1; }
+  return `${v.toFixed(1)} ${u[i]}`;
+}
+
+function formatTime(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString();
+  } catch {
+    return iso;
+  }
 }
