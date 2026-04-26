@@ -3,6 +3,10 @@ import { serve } from '@hono/node-server';
 import type { Catalog } from '../catalog/connection.js';
 import { DriveRepo } from '../drives/repo.js';
 import { ScansRepo } from '../catalog/scans-repo.js';
+import { SettingsRepo } from '../catalog/settings-repo.js';
+import { ThrottleManager } from '../throttle/manager.js';
+import { runScan } from '../scan/orchestrator.js';
+import { createLogger, defaultWriter } from '../log.js';
 import { EventBus } from './events.js';
 
 export interface CreateServerOptions {
@@ -36,15 +40,45 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       driveId: string;
       rootPaths: string[];
       profile?: 'idle' | 'balanced' | 'full-send';
+      mediainfoPath?: string;
     };
     const drive = drives.list().find((d) => d.id === body.driveId);
     if (!drive) return c.json({ error: 'drive-not-found' }, 404);
-    const scan = scans.start({
-      driveId: body.driveId,
-      rootPaths: body.rootPaths,
-      throttleProfile: body.profile ?? 'balanced',
+    const settings = new SettingsRepo(opts.db).load();
+    const throttle = new ThrottleManager(
+      settings.throttleProfiles,
+      body.profile ?? 'balanced',
+      settings.throttleSchedule,
+    );
+    const log = createLogger({ level: 'info', write: defaultWriter });
+    const mediainfoPath = body.mediainfoPath ?? '';
+    const promise = runScan({
+      db: opts.db,
+      driveId: drive.id,
+      roots: body.rootPaths,
+      categoryMap: settings.categoryMap,
+      throttle,
+      log,
+      mediainfoPath,
     });
-    return c.json({ scan }, 201);
+    promise
+      .then((r) => {
+        events.publish({
+          type: 'scan-progress',
+          scanId: r.scanId,
+          filesIndexed: r.filesIndexed,
+          filesUnchanged: r.filesUnchanged,
+          filesSkipped: r.filesSkipped,
+          bytesProcessed: 0,
+        });
+      })
+      .catch((err) => log.error('background-scan-failed', { err: (err as Error).message }));
+    await new Promise((r) => setTimeout(r, 50));
+    const recentRow = opts.db
+      .prepare(`SELECT id FROM scans WHERE drive_id = ? ORDER BY started_at DESC LIMIT 1`)
+      .get(drive.id) as { id: string } | undefined;
+    const recent = recentRow ? scans.findById(recentRow.id) : null;
+    return c.json({ scan: recent }, 201);
   });
 
   app.get('/api/scans', (c) => {
