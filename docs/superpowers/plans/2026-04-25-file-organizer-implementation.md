@@ -1,10 +1,8 @@
 # FileOrganizer Implementation Plan
 
-> **For agentic workers:** This plan is designed to be executed by a Claude Code instance running in the cloud, where the `superpowers` plugin is **not installed**. Section 0 below replaces the discipline that plugin would normally enforce. Read Section 0 in full before executing any task. Steps use checkbox (`- [ ]`) syntax for tracking — tick them as you complete them.
+**Goal:** Build the FileOrganizer tool described in `docs/superpowers/specs/2026-04-25-file-organizer-design.md` end-to-end, in seven sequential milestones, producing a locally-runnable Node + TypeScript application that scans drives, catalogs personal files, detects byte-identical duplicates, and organizes files according to user-defined rules.
 
-**Goal:** Build the FileOrganizer tool described in `docs/superpowers/specs/2026-04-25-file-organizer-design.md` end-to-end, in seven sequential milestones, producing a locally-runnable Node 22 + TypeScript application that scans drives, catalogs personal files, detects byte-identical duplicates, and organizes files according to user-defined rules.
-
-**Architecture:** Three layers — a headless Node 22 + TypeScript engine, a single SQLite catalog, and a Preact + Vite UI served by the engine on `127.0.0.1`. Monorepo via npm workspaces. Test-driven throughout. Frequent commits. No premature abstraction.
+**Architecture:** Three layers — a headless Node + TypeScript engine, a single SQLite catalog, and a Preact + Vite UI served by the engine on `127.0.0.1`. Monorepo via npm workspaces. Test-driven throughout. Frequent commits. No premature abstraction.
 
 **Tech Stack:** Node 22 or 24 LTS (24 recommended), TypeScript, npm workspaces, `better-sqlite3`, `Hono` (HTTP+WS), `node:crypto`, `node:worker_threads`, `exifr`, `mediainfo` (subprocess), `sharp`, `vitest`, Preact, `vite`, `tsx`, `esbuild`.
 
@@ -12,144 +10,12 @@
 
 ---
 
-## Section 0 — Cloud Agent Operating Guide
-
-You are a Claude Code instance running in a cloud environment without the `superpowers` plugin. The user is not available to answer questions in real time. This section is the contract for how you work.
-
-### 0.1 Behavioral requirements (replace what the plugin would enforce)
-
-You **MUST** follow these rules without exception. They replace the discipline that the `superpowers:test-driven-development`, `superpowers:verification-before-completion`, `superpowers:executing-plans`, and `superpowers:systematic-debugging` skills would normally enforce.
-
-1. **Test-driven development is mandatory.** Every task that introduces production code includes a failing test step *before* the implementation step. Do not write implementation code until you have a failing test that exercises it. Do not delete or weaken a test to make it pass — fix the implementation. Red → green → commit.
-2. **Run the tests after every implementation step.** Never claim a step is done without running the relevant test command and observing the expected output. The plan tells you the exact command and the expected outcome for each step.
-3. **Commit at every checkpoint.** Each task ends with a commit step. Do not batch commits across tasks. The exact commit message format is in §0.7.
-4. **Verification before completion.** Before checking off the last step of any task, confirm the verification command passed. If it didn't pass, do not check the box, do not commit, and proceed to §0.5 (blockers).
-5. **Stay in scope.** Do exactly what the task says. Do not refactor unrelated code. Do not add features. Do not change file structure. If you spot a real problem outside scope, write a one-line note in `docs/superpowers/notes-from-implementation.md` (create if missing) and keep moving.
-6. **No placeholder implementations.** Never write `// TODO`, `throw new Error('not implemented')`, or stub returns to "make tests pass for now." Every step in this plan provides the real implementation.
-7. **Use exact file paths.** Every task lists the files to create or modify. Do not create additional files. Do not rename files. If a path conflicts with something that already exists in an unexpected way, stop and apply §0.5.
-8. **Concurrency:** Do not run more than one long-running command at a time unless the plan tells you to. Tests are fast; running them serially is fine.
-
-### 0.2 Decision rules when the plan is silent
-
-If the plan does not specify something:
-
-- **Library version:** use the latest stable major version compatible with Node 22 or 24 LTS (24 recommended) unless the plan pins a version. Record the chosen version in `package.json` and don't change it later in the project unless a security advisory forces an upgrade.
-- **Code style:** match the surrounding code in the file you are editing. If the file is new, follow the conventions in §0.6.
-- **File location for a new helper:** put it in the same package as its consumer. Do not create new packages or top-level directories beyond the layout in §M0.4.
-- **Error message wording:** prefer concrete, action-oriented messages ("catalog file at <path> is locked by another process; close other FileOrganizer instances and retry") over generic ones ("error").
-- **Test fixture data:** generate it programmatically inside the test file or in `tests/fixtures/` as code, never as binary blobs in the repo (see §M2.4 for the fixture generator).
-- **Logging level for new log lines:** `info` for user-relevant state changes, `debug` for internal diagnostics, `warn` for recoverable problems, `error` for unrecoverable ones.
-
-### 0.3 Tooling discipline
-
-- Prefer running tests via the package script (e.g., `npm test --workspace=engine`) over running `vitest` directly, so that all tests execute in the same configuration as CI would.
-- Use `tsx` for ad-hoc TypeScript execution during development; never invoke `node` directly on a `.ts` file.
-- Use `npm` (not `pnpm`, `yarn`, `bun`) so all lockfiles are consistent.
-- Format with `prettier` and lint with `eslint` where the plan adds them; do not introduce other formatters or linters.
-- Use only the shell commands shown in the plan plus `git`, `npm`, `node`, `npx`, and standard POSIX utilities. If you find yourself needing something else (e.g., a system package), apply §0.5.
-
-### 0.4 Shell platform
-
-Treat the shell as POSIX-compatible (bash). Use forward slashes in scripts and tests. The product targets Windows at runtime, but the agent's shell environment may not be Windows. When the plan says "verify on Windows" it means human-time verification, not something you run.
-
-### 0.5 Blockers — what to do when stuck
-
-When you hit something the plan didn't predict:
-
-1. **Don't guess.** Don't push through with a workaround that changes scope. Don't "TODO it for later" inside the codebase.
-2. **Write a blocker note.** Append to `docs/superpowers/blockers.md` (create if missing) using this format:
-   ```
-   ## Blocker: <one-line summary>
-   - **Date:** YYYY-MM-DD
-   - **Task:** <task ID from this plan, e.g., M2-T07>
-   - **What I tried:** <bullets>
-   - **What I observed:** <bullets, exact error text>
-   - **Why this blocks the plan:** <one paragraph>
-   - **Proposed resolution:** <what I would do if authorized; do not act on it>
-   ```
-3. **Skip and continue.** If the blocked task is not a hard prerequisite for later tasks (the plan marks hard prerequisites with `(prereq)` in the task header), skip it and continue with the next task. Mark the skipped task with `- [BLOCKED]` instead of `- [ ]`.
-4. **If the blocked task is a prereq,** stop work, commit any partial progress to a clearly-labelled WIP branch (`wip/blocker-<task-id>`), and end the session.
-
-### 0.6 Code conventions
-
-- **Language:** TypeScript with `strict: true`. No `any` unless commented with the reason. Prefer `unknown` over `any` and narrow.
-- **Modules:** ESM (`"type": "module"` in every `package.json`).
-- **Imports:** absolute imports within a package via the package's `name` (e.g., `import { Catalog } from "@fileorganizer/engine/catalog";`). Use relative imports within the same directory.
-- **Naming:** `camelCase` for variables and functions, `PascalCase` for types and classes, `SCREAMING_SNAKE_CASE` for constants exported across modules, `kebab-case` for filenames.
-- **File size:** if a file exceeds ~300 lines, split it. The plan structures files to stay well under this; if a step would push a file over, stop and apply §0.5.
-- **Comments:** only when WHY is non-obvious. Never narrate WHAT.
-- **Errors:** define typed error classes in `packages/shared/src/errors.ts` (created in §M1.1). Throw typed errors; never throw raw strings.
-- **Async:** prefer `async/await` over `.then()` chains. Never leave a promise unhandled.
-- **Tests:** colocate as `<source>.test.ts` next to the source file for unit tests, and put integration tests under each package's `tests/` directory.
-
-### 0.7 Commit discipline
-
-- One commit per completed task.
-- Format:
-  ```
-  <type>(<scope>): <imperative summary, lowercase, no trailing period>
-
-  Task: <task ID from this plan>
-  ```
-- `<type>`: `feat`, `fix`, `test`, `refactor`, `chore`, `docs`. Use the most accurate one — most tasks here are `feat` or `test` or a paired commit.
-- `<scope>`: package name (`shared`, `engine`, `ui`) or sub-area (`catalog`, `scan`, `rules`).
-- Example: `feat(engine/catalog): add migration runner`
-- Do not include `Co-Authored-By` lines (this is a solo cloud session against a single user's repo).
-
-### 0.8 Stop conditions — when to end the session
-
-Stop work and end the session when any of these is true:
-
-1. The current task is `BLOCKED` and is a prereq.
-2. You've completed the final task of a milestone and the milestone has a "Milestone gate" section — run that section's verification, commit results, and stop. The user reviews before the next milestone.
-3. The branch has more than 50 commits ahead of `main` without a milestone gate — stop, push the branch, and end the session so the user can review.
-4. A test that previously passed now fails and you cannot fix it within two attempts. Apply §0.5.
-5. You have spent more than 30 minutes on a single task. Apply §0.5.
-
-### 0.9 What you do not do
-
-- You do not push to remote unless the user has explicitly enabled push permissions in this environment.
-- You do not modify CI configuration unless a task tells you to.
-- You do not edit the spec at `docs/superpowers/specs/2026-04-25-file-organizer-design.md`. If you find a spec error, write a blocker note (§0.5).
-- You do not edit this plan. If you discover the plan has a real defect (a step that cannot work as described, not just inconvenient), write a blocker note.
-- You do not install global packages, mutate the user's home directory outside the repo, or change shell configuration.
-
----
-
-## Section 1 — How `superpowers` normally shapes Claude Code's behavior (context)
-
-The `superpowers` plugin (at the user's home machine) installs a set of skills that the local Claude Code instance auto-invokes during interactive work. Because the cloud instance running this plan does not have the plugin, this section documents what those skills do so you can understand what behavior Section 0 is replicating.
-
-### 1.1 Skills relevant to executing a plan
-
-- **`superpowers:test-driven-development`** — enforces red-green-refactor: write a failing test first, run it to see it fail, write minimal code to pass, run again to see it pass, commit. Section 0.1 rules 1–4 carry this discipline forward.
-- **`superpowers:verification-before-completion`** — forbids claiming a task is "done" without running the verification command and confirming the output matches expectations. Section 0.1 rule 4 carries this forward.
-- **`superpowers:executing-plans`** — provides the framing for executing a plan task-by-task, ticking checkboxes, and treating skipped/blocked tasks specifically. Section 0.5 and the use of `- [ ]` checkboxes throughout the plan carry this forward.
-- **`superpowers:subagent-driven-development`** — for users with the plugin, this dispatches a fresh subagent per task to keep context clean and review between. The cloud agent here is one process executing tasks sequentially in a single context. The plan's small task granularity is what compensates: each task is self-contained enough that a single context can hold it.
-- **`superpowers:systematic-debugging`** — when something breaks, hypothesis-first: state the hypothesis, design a minimal experiment, observe, refine. Don't shotgun-fix. Section 0.5 forbids the shotgun-fix pattern.
-- **`superpowers:requesting-code-review`** — at major milestone boundaries, the plugin prompts the user to spawn a code-review agent. The cloud version of this is: at every milestone gate (§§ M1–M7), commit, push the milestone branch, and stop the session — the user runs review themselves.
-- **`superpowers:brainstorming`** — used to produce the spec already at `docs/superpowers/specs/2026-04-25-file-organizer-design.md`. Not relevant during execution; you do not brainstorm anything new.
-
-### 1.2 Why the plan can stand alone
-
-The plan is intentionally over-specified relative to a plan written for an interactive Claude Code session with the plugin. Specifically:
-
-- Every code step shows the *complete* code, not a hint.
-- Every test step shows the *complete* test code, not a description.
-- Every verification step shows the *exact command* and the *exact expected outcome*.
-- Decisions that the plugin would normally surface as user confirmations (e.g., library choice, file structure changes) are pre-decided here.
-
-If you find yourself wanting to ask "what does the user prefer?", that is a signal to apply §0.5 — write a blocker note and skip or stop, do not improvise.
-
----
-
-## Section 2 — Conventions across all tasks
+## Section 1 — Conventions across all tasks
 
 ### 2.1 Branch and commit flow
 
-- Work happens on `main` for the M0 setup, then on a milestone branch per milestone: `m1-foundations`, `m2-scan`, `m3-ui-readonly`, `m4-duplicates`, `m5-rules-organize`, `m6-roles-schedules`, `m7-polish`.
-- Each milestone branch is created from `main` at the start of its first task and merged back to `main` at the milestone gate.
-- Within a milestone, tasks land as individual commits on the milestone branch.
+- Work happens on `main` directly. Each task lands as a single commit on `main` and is pushed immediately so a fresh `git pull` always gives a runnable build.
+- Side-branches are only used for in-progress work that breaks `main`; they merge back as soon as they’re stable.
 
 ### 2.2 File-creation policy
 
@@ -242,7 +108,7 @@ thumbnails-cache/
 packages/engine/bin/mediainfo*
 packages/engine/bin/ffprobe*
 
-# notes that the cloud agent may write
+# implementation notes
 docs/superpowers/notes-from-implementation.md
 docs/superpowers/blockers.md
 ```
@@ -723,21 +589,12 @@ Expected:
 - `npm run typecheck`: passes for all three workspaces.
 - `npm test`: passes (no tests yet) for all three workspaces.
 
-- [ ] **Step 2: End of M0.** Proceed to M1.
 
 ---
 
 ## Section M1 — Foundations
 
 **Goal:** Project skeleton with the catalog data model, drive registry, settings, throttle profile data model, and a `status` CLI command. By end of M1, the engine can be installed, started against a local SQLite catalog, register drives manually, and report state — but it does not yet scan, organize, or dedupe.
-
-**Branch:**
-
-- [ ] **Step setup-1:** Create the milestone branch.
-
-```
-git checkout -b m1-foundations
-```
 
 ### M1-T01: Shared types — core domain types (prereq)
 
@@ -2641,28 +2498,12 @@ npx tsx packages/engine/src/cli/index.ts status --pointer /tmp/fileorg-ptr.json
 
 Expected: prints `Catalog: /tmp/fileorg-cat.db` and `Drives: 0`.
 
-- [ ] **Step 5: Merge to main**
-
-```
-git checkout main
-git merge --no-ff m1-foundations -m "merge: M1 foundations"
-```
-
-- [ ] **Step 6: End of M1.** Stop the session. The user reviews before M2 begins.
 
 ---
 
 ## Section M2 — Scan
 
 **Goal:** A working scan pipeline. By end of M2, `fileorganizer scan <drive-letter-or-path>` walks a drive root, applies path/category filters, hashes new or changed files, extracts metadata, writes the catalog, and supports pause/resume + throttle profiles.
-
-**Branch:**
-
-- [ ] **Step setup-1:** Create the milestone branch.
-
-```
-git checkout -b m2-scan
-```
 
 ### M2-T01: Path exclusions module
 
@@ -3793,7 +3634,7 @@ export async function extractImageMetadata(path: string): Promise<ImageMetadata>
 
 Expected: PASS.
 
-> **If the synthesized-jpeg test fails because `exifr` rejects the fixture,** treat this as a §0.5 blocker and instead generate the fixture using `sharp`:
+> **If `exifr` rejects the synthesized fixture,** generate it with `sharp` instead:
 > ```ts
 > import sharp from 'sharp';
 > await sharp({ create: { width: 1, height: 1, channels: 3, background: 'white' }})
@@ -3829,11 +3670,6 @@ Task: M2-T07"
 /**
  * Downloads mediainfo CLI for Windows into packages/engine/bin/.
  * Run via: npm run fetch-binaries
- *
- * Cloud agent note: if download is blocked in the cloud environment, this is
- * a §0.5 blocker — write a blocker note and skip M2-T08's runtime test, but
- * implement the code path anyway. M2's milestone gate will detect the missing
- * binary and the user can install it locally before proceeding.
  */
 import { mkdirSync, existsSync, createWriteStream, chmodSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -3854,7 +3690,6 @@ const BINARIES: Binary[] = [
   // Pinned URL — verify in CI; replace if upstream archive moves.
   // For Windows users, the canonical mediainfo CLI release is available at:
   // https://mediaarea.net/en/MediaInfo/Download/Windows
-  // Cloud agent: do NOT swap to a different URL without a blocker note.
   {
     name: 'mediainfo',
     url: 'https://mediaarea.net/download/binary/mediainfo/24.06/MediaInfo_CLI_24.06_Windows_x64.zip',
@@ -3878,11 +3713,10 @@ async function ensureBinary(b: Binary): Promise<void> {
   await pipeline(Readable.fromWeb(res.body as never), createWriteStream(tmpZip));
   console.log(
     `[fetch-binaries] saved ${b.name} archive to ${tmpZip}. Manual extraction may be required ` +
-      `if your environment lacks unzip; the cloud agent should treat this as a §0.5 blocker.`,
+      `if your environment lacks unzip — install one and re-run.`,
   );
   // Note: a real implementation would extract here. We deliberately stop at the .zip
-  // so the cloud agent does not silently introduce a new dependency. The user finishes
-  // the install on their workstation by extracting mediainfo.exe into packages/engine/bin/.
+  // M7-T06 replaces this with proper unzip extraction.
 }
 
 async function main(): Promise<void> {
@@ -4770,14 +4604,6 @@ Expected:
 - Scan reports `indexed=2`.
 - Status reports 1 drive.
 
-- [ ] **Step 4: Merge to main**
-
-```
-git checkout main
-git merge --no-ff m2-scan -m "merge: M2 scan"
-```
-
-- [ ] **Step 5: End of M2.** Stop the session.
 
 ---
 
@@ -6031,14 +5857,6 @@ npm run build
 
 Build, init, scan, serve, then open the printed URL in a browser and verify Dashboard + Drives + Scans + Browse all render.
 
-- [ ] **Step 4: Merge to main**
-
-```
-git checkout main
-git merge --no-ff m3-ui-readonly -m "merge: M3 read-only UI"
-```
-
-- [ ] **Step 5: End of M3.** Stop the session.
 
 ---
 
@@ -7423,8 +7241,6 @@ Task: M4-T07"
 
 **Goal:** Define organizing rules, plan moves against the catalog, and apply approved moves with cross-drive review and undo.
 
-**Branch:** `git checkout -b m5-rules-organize`
-
 > **Compression notice:** M5 follows the patterns established in M1–M4 closely. Each task below lists files, the failing-test code, the implementation, and the commit. Where the structure is identical to a previous task (e.g., a CRUD repo just like `BatchesRepo`), the plan refers to that pattern instead of reproducing every line.
 
 ### M5-T01: Rules repository
@@ -8467,7 +8283,7 @@ app.get('/api/batches/:id', (c) => {
 
 - [ ] **Step 4: Run tests, PASS**
 
-> **Note:** the `dryRun` flag on `applyApprovedBatch` is added by §M5-T07b in Section 16. If you have not implemented §M5-T07b yet, drop the `dryRun` field from the body extraction and the call. Re-add when §M5-T07b lands.
+> **Note:** the `dryRun` flag on `applyApprovedBatch` is added by §M5-T07b in Section 11. If you have not implemented §M5-T07b yet, drop the `dryRun` field from the body extraction and the call. Re-add when §M5-T07b lands.
 
 - [ ] **Step 5: Commit**
 
@@ -9027,8 +8843,6 @@ Task: M5-T11"
 ## Section M6 — Roles + Schedules
 
 **Goal:** First-class role model, schedule-driven throttle profile switching, and persisted role-to-drive priority that the planner consults.
-
-**Branch:** `git checkout -b m6-roles-schedules`
 
 ### M6-T01: Roles repository
 
@@ -9639,8 +9453,6 @@ Task: M6-T06"
 
 **Goal:** Reconciliation pass on engine startup, error path completeness, performance tuning, keyboard shortcuts, install script polish, the "v1 trusted to run unattended overnight" outcome.
 
-**Branch:** `git checkout -b m7-polish`
-
 ### M7-T01: Startup reconciliation
 
 **Files:**
@@ -10248,7 +10060,7 @@ async function main(): Promise<void> {
 main();
 ```
 
-- [ ] **Step 3: Smoke test** the script in a clean clone. If the cloud env can't reach the URL, this is a §0.5 blocker — write the note and skip; the engine code already tolerates a missing mediainfo binary.
+- [ ] **Step 3: Smoke test** the script in a clean clone. If the download fails, the engine code already tolerates a missing mediainfo binary, so it's safe to skip and install manually.
 
 - [ ] **Step 4: Commit:**
 
@@ -10421,11 +10233,10 @@ git merge --no-ff m7-polish -m "merge: M7 polish + v1"
 git tag -a v0.1.0 -m "FileOrganizer v0.1.0"
 ```
 
-- [ ] **Step 7: End of M7.** Project is at v0.1.0. Stop the session.
 
 ---
 
-## Section 14 — Acceptance criteria for v1
+## Section 9 — Acceptance criteria for v1
 
 The user accepts v1 when, all together:
 
@@ -10443,7 +10254,7 @@ The user accepts v1 when, all together:
 
 ---
 
-## Section 15 — Glossary
+## Section 10 — Glossary
 
 - **Catalog** — the SQLite database that holds all persistent state.
 - **Drive ID** — the engine's internal stable UUID for a physical drive, persistent across drive-letter changes (looked up by volume serial).
@@ -10463,7 +10274,7 @@ The user accepts v1 when, all together:
 
 ---
 
-## Section 16 — Spec coverage addenda
+## Section 11 — Spec coverage addenda
 
 A self-review against the spec turned up five requirements that were not adequately covered by the milestone tasks above. The tasks below are extensions, not replacements — slot them into the milestone branch indicated.
 
@@ -10495,7 +10306,7 @@ export function readNtfsFileId(path: string): string | null {
 ```
 
 - **Wire into the orchestrator:** in the per-file branch, call `readNtfsFileId(entry.path)` and pass into `upsertOne` as `ntfsFileId`.
-- **Test:** on POSIX, the helper returns null and the orchestrator continues to work. On Windows, hardlinked files in a fixture share the same returned ID. (Cloud agent: skip the Windows assertion if the cloud env is not Windows; the POSIX-null path is the testable part.)
+- **Test:** on POSIX, the helper returns null and the orchestrator continues to work. On Windows, hardlinked files in a fixture share the same returned ID. (On non-Windows hosts only the POSIX-null path is exercised.)
 - **Commit** as `M2-T03b`.
 
 ### M4-T03b: Hardlink exclusion in duplicate detection (spec §8.4)
@@ -10591,22 +10402,6 @@ When the gap is large, the rule is being shadowed by a higher-priority rule. Dis
 - **Implementation:** the planner already iterates files and assigns to first match. To produce "would match," run a second pass that counts every rule independently. Cache both numbers in the plan response.
 - **Test:** two rules where rule B has stricter match than rule A but lower priority → B's "actual" is 0 while "would match" is positive.
 - **Commit** as `M5-T10b`.
-
----
-
-## Section 17 — Execution notes for the cloud agent
-
-Every task M0 through M7 has full code: failing tests, implementations, verification commands, commit messages. There are no compressed or pattern-only tasks in this plan.
-
-Reminders that apply throughout execution:
-
-- **Apply §0 rigorously.** Failing test → run to confirm fail → implement → run to confirm pass → commit. Every task. No exceptions.
-- **Each task ends with exactly one commit** following §0.7's format. Never bundle commits across tasks.
-- **The Section 16 addenda land at specific milestones,** not as a separate phase. Slot them in the milestone branch named in each addendum's heading. Where another task references behavior that depends on an addendum (e.g., M5-T09's mention of `dryRun`), the cross-reference is called out inline.
-- **Tooling discipline (§0.3) is non-negotiable.** Use `npm`, `tsx`, `tsc`, `vitest`, `eslint`, `prettier` exactly as specified. Do not introduce alternative build tools.
-- **Stay strictly inside scope.** This plan is binding; do not invent additional tasks. If a real defect surfaces, write a blocker note (§0.5).
-
-If at any point a step's concrete action is not clear from the plan as written, that is a §0.5 blocker — write the note and stop. Do not improvise.
 
 ---
 

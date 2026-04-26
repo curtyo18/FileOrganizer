@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git init *)",
+      "Bash(git remote *)",
+      "Bash(git symbolic-ref *)",
+      "Bash(git add *)",
+      "Bash(git fetch *)",
+      "Bash(git checkout *)",
+      "Bash(npm --version)",
+      "Bash(nvm list *)",
+      "Bash(nvm use *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(git merge *)",
+      "Bash(export PATH=\"/e/nvm4w/nodejs:$PATH\")",
+      "Bash(npm install *)",
+      "Bash(npm test *)",
+      "Bash(git commit *)",
+      "Bash(npx tsx *)",
+      "Bash(npm run *)",
+      "Bash(git branch *)"
+    ]
+  }
+}
