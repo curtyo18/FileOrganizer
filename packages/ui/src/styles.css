@@ -1,0 +1,25 @@
+:root {
+  --bg: #0e0f12;
+  --panel: #16181d;
+  --border: #2a2d34;
+  --text: #e6e7ea;
+  --muted: #8a8f99;
+  --accent: #5c8bff;
+  --danger: #ff6b6b;
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); }
+a { color: var(--accent); text-decoration: none; }
+.layout { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+.sidebar { background: var(--panel); border-right: 1px solid var(--border); padding: 16px; }
+.sidebar nav a { display: block; padding: 8px 12px; border-radius: 6px; }
+.sidebar nav a.active { background: var(--border); color: var(--text); }
+.main { padding: 24px; }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+.muted { color: var(--muted); }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+button { background: var(--accent); color: white; border: 0; padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+button.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+.fill-bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+.fill-bar > div { background: var(--accent); height: 100%; }
