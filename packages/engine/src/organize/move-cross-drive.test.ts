@@ -103,7 +103,7 @@ describe('moveCrossDrive', () => {
     const destPath = resolve(destRoot, 'Photos', '2023', 'a.jpg');
     const fileId = seedFile(sourcePath, 'hello world', sourceDriveId);
 
-    await moveCrossDrive({
+    const out = await moveCrossDrive({
       db,
       fileId,
       destPath,
@@ -113,6 +113,8 @@ describe('moveCrossDrive', () => {
       chunkBytes: 64 * 1024,
     });
 
+    expect(out.kind).toBe('moved');
+    expect(out.finalDestPath).toBe(destPath);
     expect(existsSync(destPath)).toBe(true);
     expect(readFileSync(destPath, 'utf8')).toBe('hello world');
     expect(existsSync(sourcePath)).toBe(false);
@@ -150,5 +152,65 @@ describe('moveCrossDrive', () => {
         chunkBytes: 64 * 1024,
       }),
     ).rejects.toBeInstanceOf(IntegrityError);
+  });
+
+  it('returns completed-via-existing without copying when destination has identical content', async () => {
+    const sourceRoot = resolve(dir, 'SRC');
+    const destRoot = resolve(dir, 'DST');
+    const sourcePath = resolve(sourceRoot, 'a.jpg');
+    const destPath = resolve(destRoot, 'Photos', 'a.jpg');
+    const fileId = seedFile(sourcePath, 'identical', sourceDriveId);
+    mkdirSync(resolve(destPath, '..'), { recursive: true });
+    writeFileSync(destPath, 'identical');
+
+    const out = await moveCrossDrive({
+      db,
+      fileId,
+      destPath,
+      destDriveId,
+      sourceDriveRoot: sourceRoot,
+      batchId,
+      chunkBytes: 64 * 1024,
+    });
+
+    expect(out.kind).toBe('completed-via-existing');
+    expect(out.finalDestPath).toBe(destPath);
+    expect(existsSync(sourcePath)).toBe(false);
+    const q = db
+      .prepare(`SELECT quarantine_path FROM quarantine WHERE batch_id = ?`)
+      .get(batchId) as { quarantine_path: string };
+    expect(existsSync(q.quarantine_path)).toBe(true);
+    const row = db
+      .prepare(`SELECT state FROM files WHERE id = ?`)
+      .get(fileId) as { state: string };
+    expect(row.state).toBe('quarantined');
+  });
+
+  it('writes to a suffixed destination when the original destination has different content', async () => {
+    const sourceRoot = resolve(dir, 'SRC');
+    const destRoot = resolve(dir, 'DST');
+    const sourcePath = resolve(sourceRoot, 'a.jpg');
+    const destPath = resolve(destRoot, 'Photos', 'a.jpg');
+    const fileId = seedFile(sourcePath, 'source content', sourceDriveId);
+    mkdirSync(resolve(destPath, '..'), { recursive: true });
+    writeFileSync(destPath, 'a different file already here');
+
+    const out = await moveCrossDrive({
+      db,
+      fileId,
+      destPath,
+      destDriveId,
+      sourceDriveRoot: sourceRoot,
+      batchId,
+      chunkBytes: 64 * 1024,
+    });
+
+    const expectedDest = resolve(destRoot, 'Photos', 'a_1.jpg');
+    expect(out.kind).toBe('moved');
+    expect(out.finalDestPath).toBe(expectedDest);
+    expect(readFileSync(expectedDest, 'utf8')).toBe('source content');
+    expect(readFileSync(destPath, 'utf8')).toBe('a different file already here');
+    const row = db.prepare(`SELECT path FROM files WHERE id = ?`).get(fileId) as { path: string };
+    expect(row.path).toBe(expectedDest);
   });
 });

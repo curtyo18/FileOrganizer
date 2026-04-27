@@ -5,6 +5,8 @@ import { IntegrityError } from '@fileorganizer/shared';
 import type { Catalog } from '../catalog/connection.js';
 import { hashFile } from '../scan/hasher.js';
 import { quarantineFile } from '../quarantine/quarantine.js';
+import { resolveCollision } from './collision.js';
+import type { MoveOutcome } from './move-same-drive.js';
 
 export interface MoveCrossDriveInput {
   db: Catalog;
@@ -16,7 +18,7 @@ export interface MoveCrossDriveInput {
   chunkBytes: number;
 }
 
-export async function moveCrossDrive(input: MoveCrossDriveInput): Promise<void> {
+export async function moveCrossDrive(input: MoveCrossDriveInput): Promise<MoveOutcome> {
   const row = input.db
     .prepare(
       `SELECT path, sha256, drive_id AS driveId, size_bytes AS sizeBytes, mtime
@@ -27,10 +29,30 @@ export async function moveCrossDrive(input: MoveCrossDriveInput): Promise<void> 
     | undefined;
   if (!row) throw new Error(`file ${input.fileId} not found`);
 
-  mkdirSync(dirname(input.destPath), { recursive: true });
-  await pipeline(createReadStream(row.path), createWriteStream(input.destPath));
+  const decision = await resolveCollision(input.destPath, row.sha256, input.chunkBytes);
 
-  const liveHash = await hashFile(input.destPath, {
+  if (decision.kind === 'same-content') {
+    quarantineFile({
+      db: input.db,
+      batchId: input.batchId,
+      driveId: row.driveId,
+      driveRoot: input.sourceDriveRoot,
+      sourcePath: row.path,
+      sha256: row.sha256,
+      sizeBytes: row.sizeBytes,
+      mtime: row.mtime,
+    });
+    input.db
+      .prepare(`UPDATE files SET state = 'quarantined' WHERE id = ?`)
+      .run(input.fileId);
+    return { kind: 'completed-via-existing', finalDestPath: decision.path };
+  }
+
+  const finalDestPath = decision.path;
+  mkdirSync(dirname(finalDestPath), { recursive: true });
+  await pipeline(createReadStream(row.path), createWriteStream(finalDestPath));
+
+  const liveHash = await hashFile(finalDestPath, {
     chunkBytes: input.chunkBytes,
     sleepMs: 0,
   });
@@ -51,8 +73,8 @@ export async function moveCrossDrive(input: MoveCrossDriveInput): Promise<void> 
     sizeBytes: row.sizeBytes,
     mtime: row.mtime,
   });
-
   input.db
     .prepare(`UPDATE files SET path = ?, drive_id = ?, state = 'moved' WHERE id = ?`)
-    .run(input.destPath, input.destDriveId, input.fileId);
+    .run(finalDestPath, input.destDriveId, input.fileId);
+  return { kind: 'moved', finalDestPath };
 }
