@@ -8,6 +8,8 @@ disk space before a machine migration.
 Runs entirely on your own machine. Nothing leaves your network, nothing is
 uploaded anywhere. The catalog is a local SQLite file you own and can move.
 
+![FileOrganizer dashboard](docs/screenshots/dashboard.png)
+
 ## What it does
 
 - **Scans** drives and indexes images, video, audio, documents, spreadsheets,

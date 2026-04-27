@@ -1,0 +1,5 @@
+Drop screenshot files here. The README references:
+  docs/screenshots/dashboard.png
+
+If you add other screenshots, embed them in README.md the same way:
+  ![alt text](docs/screenshots/<name>.png)
