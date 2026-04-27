@@ -74,7 +74,12 @@ export class BatchesRepo {
   updateOperationStatus(
     operationId: number,
     status: OperationStatus,
-    fields: { postHash?: string; quarantinePath?: string; errorMessage?: string } = {},
+    fields: {
+      postHash?: string;
+      quarantinePath?: string;
+      errorMessage?: string;
+      destPath?: string;
+    } = {},
   ): void {
     const sets: string[] = ['status = ?'];
     const values: unknown[] = [status];
@@ -89,6 +94,10 @@ export class BatchesRepo {
     if (fields.errorMessage !== undefined) {
       sets.push('error_message = ?');
       values.push(fields.errorMessage);
+    }
+    if (fields.destPath !== undefined) {
+      sets.push('dest_path = ?');
+      values.push(fields.destPath);
     }
     values.push(operationId);
     this.db.prepare(`UPDATE operations SET ${sets.join(', ')} WHERE id = ?`).run(...values);

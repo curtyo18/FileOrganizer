@@ -384,6 +384,37 @@ describe('applyApprovedBatch', () => {
     expect(op.error_message).toMatch(/hash/i);
   });
 
+  it('updates the operation row with the actual final destPath when collision triggers a suffix rename', async () => {
+    const driveId = seedDrive('V');
+    seedScan(driveId);
+    const ruleId = seedRule('always-review');
+    const root = resolve(dir, 'V');
+    const sourcePath = resolve(root, 'a.jpg');
+    const destPath = resolve(root, 'Photos', 'a.jpg');
+    const fileId = seedFile(driveId, sourcePath, 'source content');
+    mkdirSync(resolve(destPath, '..'), { recursive: true });
+    writeFileSync(destPath, 'occupant');
+
+    const ops = [
+      plannedOp(fileId, ruleId, 'same-drive-move', driveId, sourcePath, driveId, destPath),
+    ];
+
+    const result = await applyApprovedBatch({
+      db,
+      description: 'collision suffix',
+      operations: ops,
+      driveRoots: new Map([[driveId, root]]),
+      chunkBytes: 64 * 1024,
+    });
+
+    expect(result.completed).toBe(1);
+    const expectedFinal = resolve(root, 'Photos', 'a_1.jpg');
+    const op = db
+      .prepare(`SELECT dest_path AS destPath FROM operations WHERE batch_id = ?`)
+      .get(result.batchId) as { destPath: string };
+    expect(op.destPath).toBe(expectedFinal);
+  });
+
   it('records completed-via-existing when destination already has identical content', async () => {
     const driveId = seedDrive('V');
     seedScan(driveId);

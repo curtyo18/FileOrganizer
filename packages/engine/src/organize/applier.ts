@@ -105,7 +105,9 @@ async function runBatch(input: ApplyApprovedBatchInput): Promise<ApplyApprovedBa
         const outcome = await runOne(op, batch.id, input);
         const finalStatus =
           outcome.kind === 'completed-via-existing' ? 'completed-via-existing' : 'completed';
-        batches.updateOperationStatus(ledgerOp.id, finalStatus);
+        const destPathUpdate =
+          outcome.finalDestPath !== op.destPath ? { destPath: outcome.finalDestPath } : {};
+        batches.updateOperationStatus(ledgerOp.id, finalStatus, destPathUpdate);
       }
       completed += 1;
     } catch (err) {
