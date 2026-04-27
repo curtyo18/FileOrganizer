@@ -79,7 +79,7 @@ function seedFile(path: string, content = 'test-content'): number {
   return row.id;
 }
 
-const moveOpts = (extra: Record<string, unknown>) => ({
+const moveOpts = (extra: { fileId: number; destPath: string }) => ({
   db,
   driveRoot: resolve(dir, 'V'),
   batchId: 'batch-1',

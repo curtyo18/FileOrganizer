@@ -4,7 +4,6 @@ import { resolveRole } from './role-resolver.js';
 
 function makeDrive(over: Partial<DriveRecord> & { id: string }): DriveRecord {
   return {
-    id: over.id,
     volumeSerial: `serial-${over.id}`,
     label: over.id.toUpperCase(),
     currentLetter: null,
