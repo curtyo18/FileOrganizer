@@ -22,8 +22,9 @@ uploaded anywhere. The catalog is a local SQLite file you own and can move.
 - **Quarantines** non-keepers into a per-drive `_FileOrganizer_quarantine/`
   folder. Nothing is hard-deleted — files are recoverable until you
   explicitly purge.
-- **Organizes** (M5, in progress) photos and documents by date and category,
-  with cross-drive moves gated by your approval.
+- **Organizes** photos and documents by date and category, with
+  cross-drive moves gated by your approval, dry-run preview, and
+  per-batch undo.
 - Scans are **resumable** and **throttleable** — run at full speed overnight,
   idle profile during the workday.
 
@@ -36,7 +37,7 @@ uploaded anywhere. The catalog is a local SQLite file you own and can move.
 | M2 | Scan pipeline (walk, hash, EXIF/video metadata, throttle) | ✅ done |
 | M3 | Local web UI (Dashboard / Drives / Scans / Browse) | ✅ done |
 | M4 | Duplicates + Quarantine | ✅ done |
-| M5 | Rules engine + organize + undo | 🚧 in progress |
+| M5 | Rules engine + organize + undo | ✅ done |
 | M6 | Drive roles + throttle schedules | ⏳ |
 | M7 | Polish, reconciliation, performance pass | ⏳ |
 
