@@ -15,6 +15,12 @@ import { createLogger, defaultWriter } from '../log.js';
 import { planDedupe, type DedupeOperation } from '../dedupe/planner.js';
 import { applyDedupe } from '../dedupe/applier.js';
 import { restoreFromQuarantine } from '../quarantine/quarantine.js';
+import { BatchesRepo } from '../catalog/batches-repo.js';
+import { RulesRepo, type CreateRuleInput, type UpdateRuleInput } from '../rules/repo.js';
+import { planOrganize, type PlannedOperation } from '../organize/planner.js';
+import { applyApprovedBatch, autoApply } from '../organize/applier.js';
+import { undoBatch } from '../organize/undo.js';
+import type { RoleDefinition } from '@fileorganizer/shared';
 import { EventBus } from './events.js';
 
 export interface CreateServerOptions {
@@ -217,6 +223,120 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       }
     }
     return c.json({ restored, errors });
+  });
+
+  const rules = new RulesRepo(opts.db);
+  const batches = new BatchesRepo(opts.db);
+
+  app.get('/api/rules', (c) => c.json({ rules: rules.list() }));
+
+  app.post('/api/rules', async (c) => {
+    const body = (await c.req.json()) as CreateRuleInput;
+    const rule = rules.create(body);
+    return c.json({ rule }, 201);
+  });
+
+  app.put('/api/rules/:id', async (c) => {
+    const id = c.req.param('id');
+    const patch = (await c.req.json()) as UpdateRuleInput;
+    try {
+      const rule = rules.update(id, patch);
+      return c.json({ rule });
+    } catch {
+      return c.json({ error: `rule ${id} not found` }, 404);
+    }
+  });
+
+  app.delete('/api/rules/:id', (c) => {
+    rules.delete(c.req.param('id'));
+    return c.body(null, 204);
+  });
+
+  app.post('/api/plan/organize', async (c) => {
+    const body = (await c.req.json()) as {
+      driveRoots?: Record<string, string>;
+      roles?: RoleDefinition[];
+    };
+    const plan = planOrganize({
+      db: opts.db,
+      driveRoots: mergeDriveRoots(drives, body.driveRoots ?? {}),
+      roles: body.roles ?? [],
+    });
+    return c.json(plan);
+  });
+
+  app.post('/api/organize/auto-apply', async (c) => {
+    const body = (await c.req.json()) as {
+      operations: PlannedOperation[];
+      driveRoots?: Record<string, string>;
+    };
+    const result = await autoApply({
+      db: opts.db,
+      operations: body.operations,
+      driveRoots: mergeDriveRoots(drives, body.driveRoots ?? {}),
+      chunkBytes: 1024 * 1024,
+    });
+    if (result.autoBatchId) {
+      events.publish({
+        type: 'batch-status',
+        batchId: result.autoBatchId,
+        status: 'completed',
+      });
+    }
+    return c.json(result);
+  });
+
+  app.post('/api/organize/apply', async (c) => {
+    const body = (await c.req.json()) as {
+      description: string;
+      operations: PlannedOperation[];
+      driveRoots?: Record<string, string>;
+      dryRun?: boolean;
+    };
+    const result = await applyApprovedBatch({
+      db: opts.db,
+      description: body.description,
+      operations: body.operations,
+      driveRoots: mergeDriveRoots(drives, body.driveRoots ?? {}),
+      chunkBytes: 1024 * 1024,
+      dryRun: body.dryRun === true,
+    });
+    events.publish({
+      type: 'batch-status',
+      batchId: result.batchId,
+      status: result.failed === 0 ? 'completed' : 'failed',
+    });
+    return c.json(result);
+  });
+
+  app.post('/api/organize/undo/:batchId', async (c) => {
+    const batchId = c.req.param('batchId');
+    const body = (await c.req.json().catch(() => ({}))) as {
+      driveRoots?: Record<string, string>;
+    };
+    try {
+      const result = await undoBatch({
+        db: opts.db,
+        batchId,
+        driveRoots: mergeDriveRoots(drives, body.driveRoots ?? {}),
+      });
+      return c.json(result);
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
+  });
+
+  app.get('/api/batches', (c) => {
+    const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10), 1000);
+    return c.json({ batches: batches.list({ limit }) });
+  });
+
+  app.get('/api/batches/:id', (c) => {
+    const id = c.req.param('id');
+    const batch = batches.findById(id);
+    if (!batch) return c.json({ error: 'not-found' }, 404);
+    const operations = batches.listOperations(id);
+    return c.json({ batch, operations });
   });
 
   const __dirname = dirname(fileURLToPath(import.meta.url));
