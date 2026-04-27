@@ -319,6 +319,71 @@ describe('applyApprovedBatch', () => {
     expect(batch.status).toBe('failed');
   });
 
+  it('in dry-run mode: records ops as dry-run, skips fs writes, but verifies source hash', async () => {
+    const driveId = seedDrive('V');
+    seedScan(driveId);
+    const ruleId = seedRule('always-review');
+    const root = resolve(dir, 'V');
+    const sourcePath = resolve(root, 'a.jpg');
+    const destPath = resolve(root, 'Photos', 'a.jpg');
+    const fileId = seedFile(driveId, sourcePath, 'data');
+
+    const ops = [
+      plannedOp(fileId, ruleId, 'same-drive-move', driveId, sourcePath, driveId, destPath),
+    ];
+
+    const result = await applyApprovedBatch({
+      db,
+      description: 'preview',
+      operations: ops,
+      driveRoots: new Map([[driveId, root]]),
+      chunkBytes: 64 * 1024,
+      dryRun: true,
+    });
+
+    expect(result.completed).toBe(1);
+    expect(existsSync(destPath)).toBe(false);
+    expect(existsSync(sourcePath)).toBe(true);
+
+    const op = db
+      .prepare(`SELECT status FROM operations WHERE batch_id = ?`)
+      .get(result.batchId) as { status: string };
+    expect(op.status).toBe('dry-run');
+    const row = db.prepare(`SELECT state FROM files WHERE id = ?`).get(fileId) as { state: string };
+    expect(row.state).toBe('indexed');
+  });
+
+  it('in dry-run mode: marks ops failed when source hash has drifted from the catalog', async () => {
+    const driveId = seedDrive('V');
+    seedScan(driveId);
+    const ruleId = seedRule('always-review');
+    const root = resolve(dir, 'V');
+    const sourcePath = resolve(root, 'a.jpg');
+    const destPath = resolve(root, 'Photos', 'a.jpg');
+    const fileId = seedFile(driveId, sourcePath, 'original');
+    writeFileSync(sourcePath, 'mutated since scan');
+
+    const ops = [
+      plannedOp(fileId, ruleId, 'same-drive-move', driveId, sourcePath, driveId, destPath),
+    ];
+
+    const result = await applyApprovedBatch({
+      db,
+      description: 'preview',
+      operations: ops,
+      driveRoots: new Map([[driveId, root]]),
+      chunkBytes: 64 * 1024,
+      dryRun: true,
+    });
+
+    expect(result.failed).toBe(1);
+    const op = db
+      .prepare(`SELECT status, error_message FROM operations WHERE batch_id = ?`)
+      .get(result.batchId) as { status: string; error_message: string | null };
+    expect(op.status).toBe('failed');
+    expect(op.error_message).toMatch(/hash/i);
+  });
+
   it('records completed-via-existing when destination already has identical content', async () => {
     const driveId = seedDrive('V');
     seedScan(driveId);

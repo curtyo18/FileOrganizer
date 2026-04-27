@@ -1,6 +1,8 @@
+import { IntegrityError } from '@fileorganizer/shared';
 import type { Catalog } from '../catalog/connection.js';
 import { BatchesRepo } from '../catalog/batches-repo.js';
 import { RulesRepo } from '../rules/repo.js';
+import { hashFile } from '../scan/hasher.js';
 import { moveCrossDrive } from './move-cross-drive.js';
 import { moveSameDrive, type MoveOutcome } from './move-same-drive.js';
 import type { PlannedOperation } from './planner.js';
@@ -63,6 +65,7 @@ export interface ApplyApprovedBatchInput {
   operations: PlannedOperation[];
   driveRoots: Map<string, string>;
   chunkBytes: number;
+  dryRun?: boolean;
 }
 
 export interface ApplyApprovedBatchResult {
@@ -95,9 +98,15 @@ async function runBatch(input: ApplyApprovedBatchInput): Promise<ApplyApprovedBa
     });
 
     try {
-      const outcome = await runOne(op, batch.id, input);
-      const finalStatus = outcome.kind === 'completed-via-existing' ? 'completed-via-existing' : 'completed';
-      batches.updateOperationStatus(ledgerOp.id, finalStatus);
+      if (input.dryRun) {
+        await verifySourceHash(input.db, op.fileId, input.chunkBytes);
+        batches.updateOperationStatus(ledgerOp.id, 'dry-run');
+      } else {
+        const outcome = await runOne(op, batch.id, input);
+        const finalStatus =
+          outcome.kind === 'completed-via-existing' ? 'completed-via-existing' : 'completed';
+        batches.updateOperationStatus(ledgerOp.id, finalStatus);
+      }
       completed += 1;
     } catch (err) {
       batches.updateOperationStatus(ledgerOp.id, 'failed', {
@@ -109,6 +118,20 @@ async function runBatch(input: ApplyApprovedBatchInput): Promise<ApplyApprovedBa
 
   batches.finish(batch.id, failed === 0 ? 'completed' : 'failed', { completed, failed });
   return { batchId: batch.id, completed, failed };
+}
+
+async function verifySourceHash(db: Catalog, fileId: number, chunkBytes: number): Promise<void> {
+  const row = db
+    .prepare(`SELECT path, sha256 FROM files WHERE id = ?`)
+    .get(fileId) as { path: string; sha256: string } | undefined;
+  if (!row) throw new Error(`file ${fileId} not found`);
+  const live = await hashFile(row.path, { chunkBytes, sleepMs: 0 });
+  if (live !== row.sha256) {
+    throw new IntegrityError(
+      'SOURCE_HASH_DRIFT',
+      `source hash ${live} != catalog ${row.sha256}`,
+    );
+  }
 }
 
 async function runOne(
