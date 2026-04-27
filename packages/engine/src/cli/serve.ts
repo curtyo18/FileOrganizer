@@ -2,6 +2,7 @@ import { readPointer, writePointer, defaultCatalogPath } from '../catalog/locato
 import { openCatalog, closeCatalog } from '../catalog/connection.js';
 import { migrate } from '../catalog/migrate.js';
 import { SettingsRepo } from '../catalog/settings-repo.js';
+import { seedDefaultRules } from '../rules/defaults.js';
 import { createServer } from '../api/server.js';
 
 export interface ServeCliOptions {
@@ -18,6 +19,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
     try {
       migrate(initDb);
       new SettingsRepo(initDb).load();
+      seedDefaultRules(initDb);
     } finally {
       closeCatalog(initDb);
     }
@@ -26,6 +28,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
   }
   const db = openCatalog(ptr.catalogPath);
   migrate(db);
+  seedDefaultRules(db);
   const server = await createServer({ db, port: opts.port ?? 0, hostname: '127.0.0.1' });
   writePointer(opts.pointerPath, { catalogPath: ptr.catalogPath, uiPort: server.port });
   const url = `http://127.0.0.1:${server.port}`;

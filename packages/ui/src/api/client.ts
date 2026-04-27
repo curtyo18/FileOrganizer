@@ -1,4 +1,40 @@
-import type { DriveRecord } from '@fileorganizer/shared';
+import type {
+  BatchRecord,
+  DriveRecord,
+  OperationRecord,
+  Rule,
+  RoleDefinition,
+} from '@fileorganizer/shared';
+
+export interface PlannedOperationUI {
+  fileId: number;
+  ruleId: string;
+  sourceDriveId: string;
+  sourcePath: string;
+  destDriveId: string;
+  destPath: string;
+  kind: 'same-drive-move' | 'cross-drive-move' | 'noop';
+  estimatedBytes: number;
+}
+
+export interface OrganizePlanResponse {
+  operations: PlannedOperationUI[];
+  unmatched: number[];
+  unresolvedRoles: { ruleId: string; reason: string }[];
+}
+
+export interface ApplyResultUI {
+  batchId: string;
+  completed: number;
+  failed: number;
+}
+
+export interface UndoResultUI {
+  undoBatchId: string;
+  reverted: number;
+  skipped: number;
+  errors: { operationId: number; reason: string }[];
+}
 
 export interface DuplicateCopyUI {
   fileId: number;
@@ -106,6 +142,90 @@ export class ApiClient {
     });
     if (!res.ok) throw new Error(`restore failed: ${res.status}`);
     return res.json() as Promise<{ restored: number; errors: string[] }>;
+  }
+
+  async listRules(): Promise<Rule[]> {
+    const data = await this.get<{ rules: Rule[] }>('/api/rules');
+    return data.rules;
+  }
+
+  async createRule(input: Omit<Rule, 'id'>): Promise<Rule> {
+    const res = await fetch(`${this.opts.baseUrl}/api/rules`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) throw new Error(`createRule: ${res.status}`);
+    const body = (await res.json()) as { rule: Rule };
+    return body.rule;
+  }
+
+  async updateRule(id: string, patch: Partial<Omit<Rule, 'id'>>): Promise<Rule> {
+    const res = await fetch(`${this.opts.baseUrl}/api/rules/${id}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) throw new Error(`updateRule: ${res.status}`);
+    const body = (await res.json()) as { rule: Rule };
+    return body.rule;
+  }
+
+  async deleteRule(id: string): Promise<void> {
+    const res = await fetch(`${this.opts.baseUrl}/api/rules/${id}`, { method: 'DELETE' });
+    if (!res.ok && res.status !== 204) throw new Error(`deleteRule: ${res.status}`);
+  }
+
+  async planOrganize(
+    driveRoots: Record<string, string>,
+    roles: RoleDefinition[],
+  ): Promise<OrganizePlanResponse> {
+    const res = await fetch(`${this.opts.baseUrl}/api/plan/organize`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ driveRoots, roles }),
+    });
+    if (!res.ok) throw new Error(`planOrganize: ${res.status}`);
+    return (await res.json()) as OrganizePlanResponse;
+  }
+
+  async organizeApply(input: {
+    description: string;
+    operations: PlannedOperationUI[];
+    driveRoots: Record<string, string>;
+    dryRun?: boolean;
+  }): Promise<ApplyResultUI> {
+    const res = await fetch(`${this.opts.baseUrl}/api/organize/apply`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) throw new Error(`organizeApply: ${res.status}`);
+    return (await res.json()) as ApplyResultUI;
+  }
+
+  async organizeUndo(
+    batchId: string,
+    driveRoots: Record<string, string>,
+  ): Promise<UndoResultUI> {
+    const res = await fetch(`${this.opts.baseUrl}/api/organize/undo/${encodeURIComponent(batchId)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ driveRoots }),
+    });
+    if (!res.ok) throw new Error(`organizeUndo: ${res.status}`);
+    return (await res.json()) as UndoResultUI;
+  }
+
+  async listBatches(limit = 100): Promise<BatchRecord[]> {
+    const data = await this.get<{ batches: BatchRecord[] }>(`/api/batches?limit=${limit}`);
+    return data.batches;
+  }
+
+  async getBatch(id: string): Promise<{ batch: BatchRecord; operations: OperationRecord[] }> {
+    return this.get<{ batch: BatchRecord; operations: OperationRecord[] }>(
+      `/api/batches/${encodeURIComponent(id)}`,
+    );
   }
 
   async startScan(input: {

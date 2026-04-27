@@ -23,10 +23,12 @@ export function App() {
   const [section, setSection] = useState<string>(pathToSection(window.location.pathname));
   const [drives, setDrives] = useState<DriveRecord[]>([]);
   const [scans, setScans] = useState<ScanRecord[]>([]);
+  const [ruleCount, setRuleCount] = useState<number>(0);
 
   const reloadGlobal = () => {
     api.listDrives().then(setDrives).catch(() => {});
     api.listScans().then((s) => setScans(s as ScanRecord[])).catch(() => {});
+    api.listRules().then((rs) => setRuleCount(rs.length)).catch(() => {});
   };
 
   useEffect(() => {
@@ -43,6 +45,7 @@ export function App() {
         active={section}
         driveCount={drives.length}
         scanIsLive={scanIsLive}
+        ruleCount={ruleCount}
       />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
         <TopBar section={section} drives={drives} />
