@@ -5,6 +5,7 @@ import {
   defaultApiClient,
   type OrganizePlanResponse,
   type PlannedOperationUI,
+  type RuleStatUI,
 } from '../api/client.js';
 import { Icon } from '../components/icon.js';
 import { DriveRootsPrompt } from '../components/drive-roots-prompt.js';
@@ -437,6 +438,9 @@ function PlanPanel({
         </div>
       ) : null}
 
+      <RuleStatsRow stats={plan.ruleStats} ruleById={ruleById} />
+
+
       {movableOps.length === 0 ? (
         <div style={{ padding: 24, textAlign: 'center', color: 'var(--fg-3)', fontSize: 11.5 }}>
           Nothing to move. Either every file already lives at its rule destination, or no rule
@@ -506,6 +510,49 @@ function PlanPanel({
           </tbody>
         </table>
       )}
+    </div>
+  );
+}
+
+function RuleStatsRow({
+  stats,
+  ruleById,
+}: {
+  stats: RuleStatUI[];
+  ruleById: Map<string, Rule>;
+}) {
+  const interesting = stats.filter((s) => s.wouldMatch > 0);
+  if (interesting.length === 0) return null;
+  return (
+    <div
+      style={{
+        padding: '8px 12px',
+        borderTop: '1px solid var(--bd)',
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 10,
+        fontSize: 11,
+      }}
+    >
+      <span class="label-cap" style={{ alignSelf: 'center' }}>
+        Rule reach
+      </span>
+      {interesting.map((s) => {
+        const rule = ruleById.get(s.ruleId);
+        const shadowed = s.actualMatch < s.wouldMatch;
+        const fully = s.wouldMatch > 0 && s.actualMatch === 0;
+        const pillClass = fully ? 'pill warn' : shadowed ? 'pill info' : 'pill ok';
+        const tip = fully
+          ? 'Fully shadowed — every file this rule would match is being claimed by a higher-priority rule.'
+          : shadowed
+            ? `${s.wouldMatch - s.actualMatch} of ${s.wouldMatch} files were claimed by a higher-priority rule.`
+            : 'Every file this rule would match is being claimed by it.';
+        return (
+          <span key={s.ruleId} class={pillClass} title={tip}>
+            {rule?.name ?? s.ruleId.slice(0, 8)}: {s.actualMatch}/{s.wouldMatch}
+          </span>
+        );
+      })}
     </div>
   );
 }

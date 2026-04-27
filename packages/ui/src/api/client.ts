@@ -17,10 +17,17 @@ export interface PlannedOperationUI {
   estimatedBytes: number;
 }
 
+export interface RuleStatUI {
+  ruleId: string;
+  wouldMatch: number;
+  actualMatch: number;
+}
+
 export interface OrganizePlanResponse {
   operations: PlannedOperationUI[];
   unmatched: number[];
   unresolvedRoles: { ruleId: string; reason: string }[];
+  ruleStats: RuleStatUI[];
 }
 
 export interface ApplyResultUI {

@@ -7,7 +7,7 @@ import type {
 import type { Catalog } from '../catalog/connection.js';
 import { DriveRepo } from '../drives/repo.js';
 import { RulesRepo } from '../rules/repo.js';
-import { firstMatch } from '../rules/matcher.js';
+import { firstMatch, matches } from '../rules/matcher.js';
 import { renderTemplate } from '../rules/template.js';
 import { resolveRole } from '../rules/role-resolver.js';
 
@@ -29,10 +29,17 @@ export interface UnresolvedRole {
   reason: string;
 }
 
+export interface RuleStat {
+  ruleId: string;
+  wouldMatch: number;
+  actualMatch: number;
+}
+
 export interface OrganizePlan {
   operations: PlannedOperation[];
   unmatched: number[];
   unresolvedRoles: UnresolvedRole[];
+  ruleStats: RuleStat[];
 }
 
 export interface PlanInput {
@@ -52,6 +59,8 @@ export function planOrganize(input: PlanInput): OrganizePlan {
   const operations: PlannedOperation[] = [];
   const unmatched: number[] = [];
   const unresolvedRoles: UnresolvedRole[] = [];
+  const wouldMatchCounts = new Map<string, number>(rules.map((r) => [r.id, 0]));
+  const actualMatchCounts = new Map<string, number>(rules.map((r) => [r.id, 0]));
 
   const rows = input.db
     .prepare(`SELECT * FROM files WHERE state = 'indexed' ORDER BY id`)
@@ -59,11 +68,18 @@ export function planOrganize(input: PlanInput): OrganizePlan {
 
   for (const row of rows) {
     const file = rowToFileRecord(row);
+    for (const rule of rules) {
+      if (!rule.enabled) continue;
+      if (matches(file, rule)) {
+        wouldMatchCounts.set(rule.id, (wouldMatchCounts.get(rule.id) ?? 0) + 1);
+      }
+    }
     const rule = firstMatch(file, rules);
     if (!rule) {
       unmatched.push(file.id);
       continue;
     }
+    actualMatchCounts.set(rule.id, (actualMatchCounts.get(rule.id) ?? 0) + 1);
 
     const role = roleByName.get(rule.destinationRole);
     if (!role) {
@@ -114,7 +130,13 @@ export function planOrganize(input: PlanInput): OrganizePlan {
     });
   }
 
-  return { operations, unmatched, unresolvedRoles };
+  const ruleStats: RuleStat[] = rules.map((r) => ({
+    ruleId: r.id,
+    wouldMatch: wouldMatchCounts.get(r.id) ?? 0,
+    actualMatch: actualMatchCounts.get(r.id) ?? 0,
+  }));
+
+  return { operations, unmatched, unresolvedRoles, ruleStats };
 }
 
 function rowToFileRecord(row: Record<string, unknown>): FileRecord {

@@ -219,6 +219,44 @@ describe('planOrganize', () => {
     expect(plan.unresolvedRoles[0]!.reason).toContain('archive');
   });
 
+  it('reports per-rule wouldMatch vs actualMatch so the UI can flag shadowed rules', () => {
+    const driveId = seedDrive('PRIMARY');
+    const broadId = new RulesRepo(db).create({
+      name: 'all images',
+      priority: 100,
+      match: { category: ['image'] },
+      destinationRole: 'photos',
+      destinationTemplate: 'Photos/{filename}',
+      movePolicy: 'same-drive-auto',
+      quarantinePolicy: 'default',
+    }).id;
+    const strictId = new RulesRepo(db).create({
+      name: 'old images only',
+      priority: 200,
+      match: { category: ['image'], dateBefore: '2024-01-01' },
+      destinationRole: 'photos',
+      destinationTemplate: 'Photos/old/{filename}',
+      movePolicy: 'same-drive-auto',
+      quarantinePolicy: 'default',
+    }).id;
+    const root = resolve(dir, 'PRIMARY');
+    seedFile({ driveId, path: resolve(root, 'recent.jpg'), name: 'recent.jpg', exifDate: '2025-01-01T00:00:00.000Z' });
+    seedFile({ driveId, path: resolve(root, 'old.jpg'), name: 'old.jpg', exifDate: '2023-01-01T00:00:00.000Z' });
+
+    const plan = planOrganize({
+      db,
+      driveRoots: new Map([[driveId, root]]),
+      roles: [role('photos', [driveId])],
+    });
+
+    const broad = plan.ruleStats.find((s) => s.ruleId === broadId)!;
+    const strict = plan.ruleStats.find((s) => s.ruleId === strictId)!;
+    expect(broad.wouldMatch).toBe(2);
+    expect(broad.actualMatch).toBe(2);
+    expect(strict.wouldMatch).toBe(1);
+    expect(strict.actualMatch).toBe(0);
+  });
+
   it('reports unresolvedRoles when the rule references a role that is not defined', () => {
     const driveId = seedDrive('PRIMARY');
     new RulesRepo(db).create({
