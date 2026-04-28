@@ -656,6 +656,79 @@ describe('plan + apply + undo endpoints', () => {
   });
 });
 
+describe('fs/list endpoint', () => {
+  it('lists registered drives for the special path /', async () => {
+    const { mkdirSync } = await import('node:fs');
+    const { DriveRepo } = await import('../drives/repo.js');
+    const driveRoot = join(dir, 'fs-drive');
+    mkdirSync(driveRoot, { recursive: true });
+    new DriveRepo(db).upsert({
+      volumeSerial: 'FS',
+      label: 'FS',
+      currentLetter: null,
+      mountPath: driveRoot,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1,
+      freeBytes: 1,
+    });
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/fs/list?path=/`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { entries: Array<{ name: string; kind: string; path: string }> };
+    expect(body.entries.some((e) => e.path === driveRoot && e.kind === 'dir')).toBe(true);
+  });
+
+  it('returns 403 for paths outside any registered drive', async () => {
+    const { mkdirSync } = await import('node:fs');
+    const { DriveRepo } = await import('../drives/repo.js');
+    const driveRoot = join(dir, 'fs-only');
+    mkdirSync(driveRoot, { recursive: true });
+    new DriveRepo(db).upsert({
+      volumeSerial: 'OZ',
+      label: 'OZ',
+      currentLetter: null,
+      mountPath: driveRoot,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1,
+      freeBytes: 1,
+    });
+    const res = await fetch(
+      `http://127.0.0.1:${handle.port}/api/fs/list?path=${encodeURIComponent('/etc')}`,
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it('lists immediate children of a folder under a registered drive, dirs first', async () => {
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    const { DriveRepo } = await import('../drives/repo.js');
+    const driveRoot = join(dir, 'fs-children');
+    mkdirSync(driveRoot, { recursive: true });
+    mkdirSync(join(driveRoot, 'beta'), { recursive: true });
+    mkdirSync(join(driveRoot, 'alpha'), { recursive: true });
+    writeFileSync(join(driveRoot, 'z.txt'), 'z');
+    writeFileSync(join(driveRoot, 'a.txt'), 'a');
+    new DriveRepo(db).upsert({
+      volumeSerial: 'CH',
+      label: 'CH',
+      currentLetter: null,
+      mountPath: driveRoot,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1,
+      freeBytes: 1,
+    });
+    const res = await fetch(
+      `http://127.0.0.1:${handle.port}/api/fs/list?path=${encodeURIComponent(driveRoot)}`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      entries: Array<{ name: string; kind: 'dir' | 'file' }>;
+    };
+    expect(body.entries.map((e) => e.name)).toEqual(['alpha', 'beta', 'a.txt', 'z.txt']);
+  });
+});
+
 describe('preview endpoint', () => {
   it('serves a resized JPEG for an indexed image', async () => {
     const sharp = (await import('sharp')).default;

@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
@@ -144,6 +144,54 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       )
       .all(driveId, limit, offset);
     return c.json({ files: rows });
+  });
+
+  app.get('/api/fs/list', (c) => {
+    const requested = c.req.query('path') ?? '';
+    if (!requested) return c.json({ error: 'path required' }, 400);
+    const allowedRoots = drives
+      .list()
+      .map((d) => d.mountPath)
+      .filter((p): p is string => !!p);
+    if (requested === '/') {
+      const seen = new Set<string>();
+      const entries = allowedRoots
+        .filter((p) => {
+          if (seen.has(p)) return false;
+          seen.add(p);
+          return true;
+        })
+        .map((p) => ({ name: p, kind: 'dir' as const, path: p }));
+      return c.json({ entries });
+    }
+    const abs = resolve(requested);
+    if (!isPathUnderAny(abs, allowedRoots)) {
+      return c.json({ error: 'path is not under a registered drive' }, 403);
+    }
+    if (!existsSync(abs)) return c.json({ error: 'path not found' }, 404);
+    let dirents;
+    try {
+      dirents = readdirSync(abs, { withFileTypes: true });
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
+    const entries = dirents
+      .map((d) => {
+        const childPath = join(abs, d.name);
+        const kind: 'dir' | 'file' | null = d.isDirectory()
+          ? 'dir'
+          : d.isFile()
+            ? 'file'
+            : null;
+        return kind ? { name: d.name, kind, path: childPath } : null;
+      })
+      .filter((e): e is { name: string; kind: 'dir' | 'file'; path: string } => e !== null)
+      .sort((a, b) => {
+        if (a.kind !== b.kind) return a.kind === 'dir' ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      })
+      .slice(0, 1000);
+    return c.json({ entries });
   });
 
   app.get('/api/preview/:fileId', async (c) => {

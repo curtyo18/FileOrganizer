@@ -3,6 +3,7 @@ import type { RoutableProps } from 'preact-router';
 import type { DriveRecord, ScanRecord } from '@fileorganizer/shared';
 import { defaultApiClient } from '../api/client.js';
 import { Icon } from '../components/icon.js';
+import { FolderPickerModal } from '../components/folder-picker.js';
 import { formatBytes, formatNum, relativeTime } from '../lib/format.js';
 
 type Profile = 'idle' | 'balanced' | 'full-send';
@@ -15,6 +16,8 @@ export function Scans(_props: RoutableProps) {
   const [profile, setProfile] = useState<Profile>('balanced');
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const pollTimer = useRef<number | null>(null);
 
   const reload = async () => {
@@ -54,13 +57,17 @@ export function Scans(_props: RoutableProps) {
       setError('Enter a path');
       return;
     }
+    setStarting(true);
+    const target = pathInput.trim();
     try {
-      await api.startScan({ rootPath: pathInput.trim(), profile });
-      setInfo(`Scan started for ${pathInput.trim()}`);
+      await api.startScan({ rootPath: target, profile });
+      setInfo(`Scan started for ${target}`);
       setPathInput('');
       setTimeout(reload, 200);
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setStarting(false);
     }
   };
 
@@ -86,17 +93,22 @@ export function Scans(_props: RoutableProps) {
             value={pathInput}
             onInput={(e) => setPathInput((e.target as HTMLInputElement).value)}
             style={{ flex: 1, minWidth: 240 }}
+            disabled={starting}
           />
+          <button class="btn ghost" onClick={() => setPickerOpen(true)} disabled={starting}>
+            <Icon name="folder" size={11} /> Browse…
+          </button>
           <select
             value={profile}
             onChange={(e) => setProfile((e.target as HTMLSelectElement).value as Profile)}
+            disabled={starting}
           >
             <option value="idle">idle</option>
             <option value="balanced">balanced</option>
             <option value="full-send">full-send</option>
           </select>
-          <button class="btn primary" onClick={onScan}>
-            <Icon name="play" size={11} /> Scan
+          <button class="btn primary" onClick={onScan} disabled={starting}>
+            <Icon name="play" size={11} /> {starting ? 'Starting scan…' : 'Scan'}
           </button>
         </div>
         {error ? (
@@ -236,6 +248,17 @@ export function Scans(_props: RoutableProps) {
           </table>
         )}
       </div>
+
+      {pickerOpen ? (
+        <FolderPickerModal
+          initialPath={pathInput.trim() || '/'}
+          onSelect={(p) => {
+            setPathInput(p);
+            setPickerOpen(false);
+          }}
+          onCancel={() => setPickerOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }
