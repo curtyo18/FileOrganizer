@@ -7,6 +7,7 @@ import type {
 import type { Catalog } from '../catalog/connection.js';
 import { DriveRepo } from '../drives/repo.js';
 import { RulesRepo } from '../rules/repo.js';
+import { RolesRepo } from '../roles/repo.js';
 import { firstMatch, matches } from '../rules/matcher.js';
 import { renderTemplate } from '../rules/template.js';
 import { resolveRole } from '../rules/role-resolver.js';
@@ -45,7 +46,7 @@ export interface OrganizePlan {
 export interface PlanInput {
   db: Catalog;
   driveRoots: Map<string, string>;
-  roles: RoleDefinition[];
+  roles?: RoleDefinition[];
 }
 
 export function planOrganize(input: PlanInput): OrganizePlan {
@@ -54,7 +55,8 @@ export function planOrganize(input: PlanInput): OrganizePlan {
   const drivesById = new Map<string, DriveRecord>(
     drives.map((d) => [d.id, { ...d, connected: input.driveRoots.has(d.id) }]),
   );
-  const roleByName = new Map<string, RoleDefinition>(input.roles.map((r) => [r.name, r]));
+  const roles = input.roles ?? new RolesRepo(input.db).list();
+  const roleByName = new Map<string, RoleDefinition>(roles.map((r) => [r.name, r]));
 
   const operations: PlannedOperation[] = [];
   const unmatched: number[] = [];

@@ -83,7 +83,7 @@ export function Organize(_props: RoutableProps) {
     try {
       const merged = { ...driveRootsFromCatalog, ...overrides };
       setPlanRoots(merged);
-      const result = await api.planOrganize(merged, []);
+      const result = await api.planOrganize(merged);
       setPlan(result);
       setSelected(
         new Set(

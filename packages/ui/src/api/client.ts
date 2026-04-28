@@ -2,8 +2,8 @@ import type {
   BatchRecord,
   DriveRecord,
   OperationRecord,
-  Rule,
   RoleDefinition,
+  Rule,
 } from '@fileorganizer/shared';
 
 export interface PlannedOperationUI {
@@ -227,14 +227,11 @@ export class ApiClient {
     if (!res.ok && res.status !== 204) throw new Error(`deleteRule: ${res.status}`);
   }
 
-  async planOrganize(
-    driveRoots: Record<string, string>,
-    roles: RoleDefinition[],
-  ): Promise<OrganizePlanResponse> {
+  async planOrganize(driveRoots: Record<string, string>): Promise<OrganizePlanResponse> {
     const res = await fetch(`${this.opts.baseUrl}/api/plan/organize`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ driveRoots, roles }),
+      body: JSON.stringify({ driveRoots }),
     });
     if (!res.ok) throw new Error(`planOrganize: ${res.status}`);
     return (await res.json()) as OrganizePlanResponse;

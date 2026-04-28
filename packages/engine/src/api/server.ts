@@ -21,7 +21,7 @@ import { RolesRepo, type CreateRoleInput, type UpdateRoleInput } from '../roles/
 import { planOrganize, type PlannedOperation } from '../organize/planner.js';
 import { applyApprovedBatch, autoApply } from '../organize/applier.js';
 import { undoBatch } from '../organize/undo.js';
-import { RuleError, type RoleDefinition } from '@fileorganizer/shared';
+import { RuleError } from '@fileorganizer/shared';
 import { EventBus } from './events.js';
 
 export interface CreateServerOptions {
@@ -291,12 +291,10 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   app.post('/api/plan/organize', async (c) => {
     const body = (await c.req.json()) as {
       driveRoots?: Record<string, string>;
-      roles?: RoleDefinition[];
     };
     const plan = planOrganize({
       db: opts.db,
       driveRoots: mergeDriveRoots(drives, body.driveRoots ?? {}),
-      roles: body.roles ?? [],
     });
     return c.json(plan);
   });

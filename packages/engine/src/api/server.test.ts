@@ -326,12 +326,22 @@ describe('plan + apply + undo endpoints', () => {
     });
     expect(ruleRes.status).toBe(201);
 
+    const roleRes = await fetch(`http://127.0.0.1:${handle.port}/api/roles`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'photos',
+        drivePriority: [driveId],
+        fillThresholdPercent: 99,
+      }),
+    });
+    expect(roleRes.status).toBe(201);
+
     const planRes = await fetch(`http://127.0.0.1:${handle.port}/api/plan/organize`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         driveRoots: { [driveId]: dataDir },
-        roles: [{ name: 'photos', drivePriority: [driveId], fillThresholdPercent: 99 }],
       }),
     });
     expect(planRes.status).toBe(200);
@@ -387,7 +397,7 @@ describe('plan + apply + undo endpoints', () => {
     const planRes = await fetch(`http://127.0.0.1:${handle.port}/api/plan/organize`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ driveRoots: {}, roles: [] }),
+      body: JSON.stringify({ driveRoots: {} }),
     });
     expect(planRes.status).toBe(200);
     const body = (await planRes.json()) as {
@@ -397,5 +407,98 @@ describe('plan + apply + undo endpoints', () => {
     };
     expect(Array.isArray(body.operations)).toBe(true);
     expect(Array.isArray(body.unresolvedRoles)).toBe(true);
+  });
+
+  it('plan output reflects role priority changes from the catalog', async () => {
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    const photosDir = join(dir, 'priority-photos');
+    mkdirSync(photosDir, { recursive: true });
+    writeFileSync(join(photosDir, 'a.jpg'), 'image-content');
+
+    const scanRes = await fetch(`http://127.0.0.1:${handle.port}/api/scans`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rootPath: photosDir, profile: 'idle' }),
+    });
+    expect(scanRes.status).toBe(201);
+    const { scan } = (await scanRes.json()) as { scan: { id: string; driveId: string } };
+    for (let i = 0; i < 50; i += 1) {
+      const got = await fetch(`http://127.0.0.1:${handle.port}/api/scans/${scan.id}`);
+      const body = (await got.json()) as { scan: { status: string } };
+      if (body.scan.status === 'completed') break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const primaryDriveId = scan.driveId;
+
+    const { DriveRepo } = await import('../drives/repo.js');
+    const altDriveId = new DriveRepo(db).upsert({
+      volumeSerial: 'ALT-VOL',
+      label: 'ALT',
+      currentLetter: null,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1_000_000_000,
+      freeBytes: 900_000_000,
+    }).id;
+    const altRoot = join(dir, 'alt-root');
+    mkdirSync(altRoot, { recursive: true });
+
+    await fetch(`http://127.0.0.1:${handle.port}/api/rules`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'photos by category',
+        priority: 100,
+        match: { category: ['image'] },
+        destinationRole: 'photos',
+        destinationTemplate: 'Photos/{filename}',
+        movePolicy: 'cross-drive-review',
+        quarantinePolicy: 'default',
+      }),
+    });
+
+    const create = await fetch(`http://127.0.0.1:${handle.port}/api/roles`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'photos',
+        drivePriority: [primaryDriveId, altDriveId],
+        fillThresholdPercent: 99,
+      }),
+    });
+    expect(create.status).toBe(201);
+
+    const planFirst = await fetch(`http://127.0.0.1:${handle.port}/api/plan/organize`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        driveRoots: { [primaryDriveId]: photosDir, [altDriveId]: altRoot },
+      }),
+    });
+    const planFirstBody = (await planFirst.json()) as {
+      operations: Array<{ destDriveId: string }>;
+    };
+    expect(planFirstBody.operations.length).toBeGreaterThan(0);
+    expect(planFirstBody.operations[0]!.destDriveId).toBe(primaryDriveId);
+
+    const reorder = await fetch(`http://127.0.0.1:${handle.port}/api/roles/photos`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ drivePriority: [altDriveId, primaryDriveId] }),
+    });
+    expect(reorder.status).toBe(200);
+
+    const planSecond = await fetch(`http://127.0.0.1:${handle.port}/api/plan/organize`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        driveRoots: { [primaryDriveId]: photosDir, [altDriveId]: altRoot },
+      }),
+    });
+    const planSecondBody = (await planSecond.json()) as {
+      operations: Array<{ destDriveId: string }>;
+    };
+    expect(planSecondBody.operations.length).toBeGreaterThan(0);
+    expect(planSecondBody.operations[0]!.destDriveId).toBe(altDriveId);
   });
 });

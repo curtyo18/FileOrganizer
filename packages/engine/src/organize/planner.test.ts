@@ -8,6 +8,7 @@ import { migrate } from '../catalog/migrate.js';
 import { DriveRepo } from '../drives/repo.js';
 import { FilesRepo } from '../catalog/files-repo.js';
 import { RulesRepo } from '../rules/repo.js';
+import { RolesRepo } from '../roles/repo.js';
 import { planOrganize } from './planner.js';
 
 let dir: string;
@@ -255,6 +256,73 @@ describe('planOrganize', () => {
     expect(broad.actualMatch).toBe(2);
     expect(strict.wouldMatch).toBe(1);
     expect(strict.actualMatch).toBe(0);
+  });
+
+  it('falls back to RolesRepo when the input does not specify roles', () => {
+    const sourceDriveId = seedDrive('PRIMARY');
+    const archiveDriveId = seedDrive('ARCHIVE');
+    new RulesRepo(db).create({
+      name: 'archive old photos',
+      priority: 100,
+      match: { category: ['image'] },
+      destinationRole: 'archive',
+      destinationTemplate: 'Archive/{year}/{filename}',
+      movePolicy: 'cross-drive-review',
+      quarantinePolicy: 'default',
+    });
+    const sourceRoot = resolve(dir, 'PRIMARY');
+    const archiveRoot = resolve(dir, 'ARCHIVE');
+    seedFile({ driveId: sourceDriveId, path: resolve(sourceRoot, 'a.jpg'), name: 'a.jpg' });
+
+    new RolesRepo(db).create({
+      name: 'archive',
+      drivePriority: [archiveDriveId],
+      fillThresholdPercent: 90,
+    });
+
+    const plan = planOrganize({
+      db,
+      driveRoots: new Map([
+        [sourceDriveId, sourceRoot],
+        [archiveDriveId, archiveRoot],
+      ]),
+    });
+    expect(plan.operations).toHaveLength(1);
+    expect(plan.operations[0]!.destDriveId).toBe(archiveDriveId);
+  });
+
+  it('lets a caller override the catalog roles via the optional roles input', () => {
+    const sourceDriveId = seedDrive('PRIMARY');
+    const archiveDriveId = seedDrive('ARCHIVE');
+    new RulesRepo(db).create({
+      name: 'photos',
+      priority: 100,
+      match: { category: ['image'] },
+      destinationRole: 'photos',
+      destinationTemplate: 'Photos/{year}/{filename}',
+      movePolicy: 'cross-drive-review',
+      quarantinePolicy: 'default',
+    });
+    const sourceRoot = resolve(dir, 'PRIMARY');
+    const archiveRoot = resolve(dir, 'ARCHIVE');
+    seedFile({ driveId: sourceDriveId, path: resolve(sourceRoot, 'a.jpg'), name: 'a.jpg' });
+
+    new RolesRepo(db).create({
+      name: 'photos',
+      drivePriority: [sourceDriveId],
+      fillThresholdPercent: 90,
+    });
+
+    const plan = planOrganize({
+      db,
+      driveRoots: new Map([
+        [sourceDriveId, sourceRoot],
+        [archiveDriveId, archiveRoot],
+      ]),
+      roles: [role('photos', [archiveDriveId])],
+    });
+    expect(plan.operations).toHaveLength(1);
+    expect(plan.operations[0]!.destDriveId).toBe(archiveDriveId);
   });
 
   it('reports unresolvedRoles when the rule references a role that is not defined', () => {
