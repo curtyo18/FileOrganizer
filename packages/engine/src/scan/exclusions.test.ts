@@ -24,6 +24,19 @@ describe('isPathExcluded', () => {
     expect(isPathExcluded('My Project', DEFAULT_EXCLUDED_NAMES)).toBe(false);
   });
 
+  it('excludes well-known game launcher folders', () => {
+    expect(isPathExcluded('SteamLibrary', DEFAULT_EXCLUDED_NAMES)).toBe(true);
+    expect(isPathExcluded('steamapps', DEFAULT_EXCLUDED_NAMES)).toBe(true);
+    expect(isPathExcluded('Epic Games', DEFAULT_EXCLUDED_NAMES)).toBe(true);
+    expect(isPathExcluded('GOG Games', DEFAULT_EXCLUDED_NAMES)).toBe(true);
+    expect(isPathExcluded('Battle.net', DEFAULT_EXCLUDED_NAMES)).toBe(true);
+    expect(isPathExcluded('Riot Games', DEFAULT_EXCLUDED_NAMES)).toBe(true);
+    expect(isPathExcluded('Ubisoft', DEFAULT_EXCLUDED_NAMES)).toBe(true);
+    expect(isPathExcluded('XboxGames', DEFAULT_EXCLUDED_NAMES)).toBe(true);
+    expect(isPathExcluded('WindowsApps', DEFAULT_EXCLUDED_NAMES)).toBe(true);
+    expect(isPathExcluded('Rockstar Games', DEFAULT_EXCLUDED_NAMES)).toBe(true);
+  });
+
   it('respects extra exclusions', () => {
     expect(isPathExcluded('CustomFolder', DEFAULT_EXCLUDED_NAMES, ['CustomFolder'])).toBe(true);
   });
