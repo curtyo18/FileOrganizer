@@ -39,7 +39,7 @@ uploaded anywhere. The catalog is a local SQLite file you own and can move.
 | M4 | Duplicates + Quarantine | ✅ done |
 | M5 | Rules engine + organize + undo | ✅ done |
 | M6 | Drive roles + throttle schedules | ✅ done |
-| M7 | Polish, reconciliation, performance pass | ⏳ |
+| M7 | Polish: reconciliation, free-space safety, NAS handling, shortcuts | 🚧 in progress |
 
 See `docs/superpowers/plans/` for the full plan and `docs/superpowers/specs/`
 for the design spec.
@@ -56,12 +56,24 @@ for the design spec.
   you skip it), video files are still indexed — just without their embedded
   creation date.
 
-## Quick start
+## Install from source
 
 ```
 git clone https://github.com/curtyo18/FileOrganizer.git
 cd FileOrganizer
 npm install
+npm run fetch-binaries     # downloads MediaInfo CLI into packages/engine/bin/
+npm run build
+```
+
+If `fetch-binaries` fails (corporate proxy, sandbox, transient 5xx) the
+script prints the URL and target path so you can drop the binary in
+manually. The engine tolerates a missing MediaInfo and just emits null
+video metadata.
+
+## Quick start
+
+```
 npm run start
 ```
 
@@ -74,21 +86,35 @@ Catalog default location:
 - Windows: `%APPDATA%\FileOrganizer\catalog.db`
 - macOS/Linux: `~/.fileorganizer/catalog.db`
 
-## Is it safe to run?
+## Daily use
 
-- **Scanning is read-only.** The engine reads files to compute hashes and
-  EXIF metadata. It never modifies or moves a file during a scan.
-- **Dedup moves files into a per-drive quarantine folder, not the trash.**
-  Each batch creates `<drive>\_FileOrganizer_quarantine\<batch-id>\…`
-  preserving the original folder structure. The Quarantine screen lets you
-  restore any subset back to the original path. There is no auto-purge.
-- **Nothing crosses drives without your explicit approval** (cross-drive
-  copies first verify the destination hash, then quarantine the source —
-  so a power loss leaves both copies, never zero).
+```
+# Run the local UI:
+npm run start
+# Then open the URL printed in the console (typically http://127.0.0.1:<port>).
+```
 
-That said, this is alpha-quality software. **Run it against a small test
-folder first**, or ensure you have a backup of anything irreplaceable
-before turning it loose on a real library.
+Inside the UI:
+
+- **Dashboard** (`gd`) — quick health view: drive count, scan status, recent
+  batches.
+- **Drives** (`gb` — _b_rowse) — registered drives, mount points, role
+  assignments.
+- **Scans** (`gs`) — start a scan from any folder, watch progress, resume
+  after a pause.
+- **Organize** (`go`) — edit rules, plan moves, dry-run, apply, undo.
+- **Duplicates** (`gu`) — review byte-identical sets, send non-keepers to
+  quarantine.
+- **History** (`gh`) — every batch with per-operation status; undo any
+  organize batch.
+- **Quarantine** (`gq`) — restore quarantined files back to their original
+  path, or purge after you've reviewed them.
+- **Roles** (`gr`) — define which drive(s) hold which categories, with
+  priority + overflow.
+- **Throttle** (`gt`) — switch profiles (idle / balanced / full-send) or
+  schedule them by hour.
+- Press **/** anywhere to focus the search box. Hold no modifier — `Ctrl+G`
+  still works as the browser's find-next.
 
 ## CLI (optional)
 
@@ -100,16 +126,80 @@ npx tsx packages/engine/src/cli/index.ts scan --path "D:\Pictures"
 npx tsx packages/engine/src/cli/index.ts status
 ```
 
-## How it's built
+## Is it safe to run?
 
-- **Engine**: Node + TypeScript, `better-sqlite3`, `Hono` HTTP server,
-  `node:crypto` for hashing, `node:worker_threads` for parallelism, `exifr`
-  for image metadata, MediaInfo subprocess for video.
-- **UI**: Preact + Vite, served by the engine on `127.0.0.1`. Dark dense
-  pro-tool aesthetic; design tokens in `packages/ui/src/styles.css`.
+- **Scanning is read-only.** The engine reads files to compute hashes and
+  EXIF metadata. It never modifies or moves a file during a scan.
+- **Dedup moves files into a per-drive quarantine folder, not the trash.**
+  Each batch creates `<drive>\_FileOrganizer_quarantine\<batch-id>\…`
+  preserving the original folder structure. The Quarantine screen lets you
+  restore any subset back to the original path. There is no auto-purge.
+- **Nothing crosses drives without your explicit approval** (cross-drive
+  copies first verify the destination hash, then quarantine the source —
+  so a power loss leaves both copies, never zero).
+- **Startup reconciliation** — every boot scans the operations ledger for
+  in-flight work from a prior crash and resolves it from filesystem
+  evidence (dest matches recorded hash → completed; source still there →
+  failed; both gone → ambiguous and surfaced).
+- **Free-space pre-flight** — before any cross-drive batch, the engine
+  totals bytes-needed per destination drive and refuses to start if the
+  destination's free space (minus a 5% safety margin) wouldn't cover it.
+- **NAS disconnect handling** — if a network drive disappears mid-copy,
+  the engine raises a typed `DriveError`, halts the batch, and the API
+  surfaces it as 503 instead of corrupting state.
+
+That said, this is alpha-quality software. **Run it against a small test
+folder first**, or ensure you have a backup of anything irreplaceable
+before turning it loose on a real library.
+
+## Troubleshooting
+
+- **"catalog file is locked"** — another FileOrganizer process is running.
+  Close it (the running terminal, or end the specific node PID) and retry.
+  Don't `taskkill /F /IM node.exe` — that takes down unrelated Node
+  processes too.
+- **"NAS not reachable" / 503 with `DRIVE_DISCONNECTED`** — your network
+  drive went offline mid-batch. Reconnect the drive and re-run the
+  organize. The interrupted batch is in History as `failed`; future
+  applies start fresh batches.
+- **"mediainfo not found"** — run `npm run fetch-binaries`. If the
+  download fails (e.g. behind a corporate proxy), download `MediaInfo
+  CLI` from <https://mediaarea.net/en/MediaInfo>, extract `MediaInfo.exe`
+  (or `mediainfo` on POSIX), and place it in `packages/engine/bin/`.
+- **"insufficient free space on <label>"** — the planner's pre-flight saw
+  a destination drive too full for the proposed moves. Adjust the role's
+  drive priority/overflow on the Roles screen, or move some files
+  manually first to make room.
+- **A scan stops with `paused` status** — open it on the Scans screen
+  and click Resume. Scans resume from the last completed directory; no
+  files are re-hashed unnecessarily.
+
+## Architecture
+
+Three packages in this monorepo:
+
+- `packages/shared` — types and constants used by both engine and UI.
+- `packages/engine` — Node 22 + TypeScript headless service. Owns the
+  SQLite catalog, scanning, organizing, deduping, throttle scheduling,
+  and the local HTTP API.
+- `packages/ui` — Preact + Vite frontend served by the engine on
+  `127.0.0.1`. Dark dense pro-tool aesthetic; design tokens in
+  `packages/ui/src/styles.css`.
+
+Key building blocks:
+
+- **Engine**: `better-sqlite3`, `Hono` HTTP server, `node:crypto` for
+  hashing, `node:worker_threads` for parallelism, `exifr` for image
+  metadata, MediaInfo subprocess for video.
 - **Catalog**: a single SQLite file. Schema in
   `packages/engine/src/catalog/migrations/`. Move it to a different drive
   any time — the pointer is one small JSON file under `%APPDATA%`.
+- **Throttle profiles** (idle / balanced / full-send) cap concurrency,
+  hash chunk size, and per-chunk sleep. The scheduler watches the clock
+  so a "full-send overnight, idle on weekday mornings" profile is one
+  config away.
+
+See the spec linked above for the full architecture description.
 
 ## License
 
