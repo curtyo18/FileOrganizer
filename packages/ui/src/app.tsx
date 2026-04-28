@@ -14,6 +14,7 @@ import { Roles } from './routes/roles.js';
 import { Throttle } from './routes/throttle.js';
 import { History } from './routes/history.js';
 import { Quarantine } from './routes/quarantine.js';
+import { useKeyboardShortcuts, defaultShortcuts } from './hooks/use-keyboard.js';
 
 function pathToSection(path: string): string {
   const seg = path.replace(/^\//, '').split('/')[0] || 'dashboard';
@@ -21,6 +22,7 @@ function pathToSection(path: string): string {
 }
 
 export function App() {
+  useKeyboardShortcuts(defaultShortcuts());
   const api = defaultApiClient();
   const [section, setSection] = useState<string>(pathToSection(window.location.pathname));
   const [drives, setDrives] = useState<DriveRecord[]>([]);
