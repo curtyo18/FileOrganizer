@@ -157,6 +157,138 @@ describe('rules endpoints', () => {
   });
 });
 
+describe('roles endpoints', () => {
+  it('round-trips a role through POST/GET/PUT/DELETE and reorders priorities', async () => {
+    const { DriveRepo } = await import('../drives/repo.js');
+    const d1 = new DriveRepo(db).upsert({
+      volumeSerial: 'A',
+      label: 'A',
+      currentLetter: null,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1,
+      freeBytes: 1,
+    }).id;
+    const d2 = new DriveRepo(db).upsert({
+      volumeSerial: 'B',
+      label: 'B',
+      currentLetter: null,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1,
+      freeBytes: 1,
+    }).id;
+    const base = `http://127.0.0.1:${handle.port}/api/roles`;
+
+    const create = await fetch(base, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'media-archive',
+        drivePriority: [d1, d2],
+        fillThresholdPercent: 90,
+      }),
+    });
+    expect(create.status).toBe(201);
+    const created = (await create.json()) as {
+      role: { name: string; drivePriority: string[] };
+    };
+    expect(created.role.name).toBe('media-archive');
+    expect(created.role.drivePriority).toEqual([d1, d2]);
+
+    const list = await fetch(base);
+    const listBody = (await list.json()) as {
+      roles: Array<{ name: string; drivePriority: string[] }>;
+    };
+    expect(listBody.roles.some((r) => r.name === 'media-archive')).toBe(true);
+
+    const reorder = await fetch(`${base}/media-archive`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ drivePriority: [d2, d1] }),
+    });
+    expect(reorder.status).toBe(200);
+    const reordered = (await reorder.json()) as {
+      role: { drivePriority: string[]; fillThresholdPercent: number };
+    };
+    expect(reordered.role.drivePriority).toEqual([d2, d1]);
+    expect(reordered.role.fillThresholdPercent).toBe(90);
+
+    const updateThreshold = await fetch(`${base}/media-archive`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ fillThresholdPercent: 80 }),
+    });
+    expect(updateThreshold.status).toBe(200);
+    const thresholdBody = (await updateThreshold.json()) as {
+      role: { fillThresholdPercent: number; drivePriority: string[] };
+    };
+    expect(thresholdBody.role.fillThresholdPercent).toBe(80);
+    expect(thresholdBody.role.drivePriority).toEqual([d2, d1]);
+
+    const del = await fetch(`${base}/media-archive`, { method: 'DELETE' });
+    expect(del.status).toBe(204);
+
+    const after = await fetch(base);
+    const afterBody = (await after.json()) as { roles: unknown[] };
+    expect(afterBody.roles).toEqual([]);
+  });
+
+  it('rejects duplicate role names with 409 and unknown drives with 400', async () => {
+    const { DriveRepo } = await import('../drives/repo.js');
+    const driveId = new DriveRepo(db).upsert({
+      volumeSerial: 'C',
+      label: 'C',
+      currentLetter: null,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1,
+      freeBytes: 1,
+    }).id;
+    const base = `http://127.0.0.1:${handle.port}/api/roles`;
+
+    const first = await fetch(base, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'dup',
+        drivePriority: [driveId],
+        fillThresholdPercent: 90,
+      }),
+    });
+    expect(first.status).toBe(201);
+
+    const dup = await fetch(base, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'dup',
+        drivePriority: [driveId],
+        fillThresholdPercent: 90,
+      }),
+    });
+    expect(dup.status).toBe(409);
+
+    const bad = await fetch(base, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'has-bad-drive',
+        drivePriority: ['ghost-drive'],
+        fillThresholdPercent: 90,
+      }),
+    });
+    expect(bad.status).toBe(400);
+
+    const missing = await fetch(`${base}/no-such`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ fillThresholdPercent: 50 }),
+    });
+    expect(missing.status).toBe(404);
+  });
+});
+
 describe('plan + apply + undo endpoints', () => {
   it('plans a move, applies it, then undoes it', async () => {
     const { mkdirSync, writeFileSync, existsSync, readFileSync } = await import('node:fs');

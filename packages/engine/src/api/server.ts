@@ -17,10 +17,11 @@ import { applyDedupe } from '../dedupe/applier.js';
 import { restoreFromQuarantine } from '../quarantine/quarantine.js';
 import { BatchesRepo } from '../catalog/batches-repo.js';
 import { RulesRepo, type CreateRuleInput, type UpdateRuleInput } from '../rules/repo.js';
+import { RolesRepo, type CreateRoleInput, type UpdateRoleInput } from '../roles/repo.js';
 import { planOrganize, type PlannedOperation } from '../organize/planner.js';
 import { applyApprovedBatch, autoApply } from '../organize/applier.js';
 import { undoBatch } from '../organize/undo.js';
-import type { RoleDefinition } from '@fileorganizer/shared';
+import { RuleError, type RoleDefinition } from '@fileorganizer/shared';
 import { EventBus } from './events.js';
 
 export interface CreateServerOptions {
@@ -226,7 +227,42 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   });
 
   const rules = new RulesRepo(opts.db);
+  const roles = new RolesRepo(opts.db);
   const batches = new BatchesRepo(opts.db);
+
+  app.get('/api/roles', (c) => c.json({ roles: roles.list() }));
+
+  app.post('/api/roles', async (c) => {
+    const body = (await c.req.json()) as CreateRoleInput;
+    try {
+      const role = roles.create(body);
+      return c.json({ role }, 201);
+    } catch (err) {
+      if (err instanceof RuleError && err.code === 'ROLE_EXISTS') {
+        return c.json({ error: err.message }, 409);
+      }
+      return c.json({ error: (err as Error).message }, 400);
+    }
+  });
+
+  app.put('/api/roles/:name', async (c) => {
+    const name = c.req.param('name');
+    const patch = (await c.req.json()) as UpdateRoleInput;
+    try {
+      const role = roles.update(name, patch);
+      return c.json({ role });
+    } catch (err) {
+      if (err instanceof RuleError && err.code === 'ROLE_NOT_FOUND') {
+        return c.json({ error: err.message }, 404);
+      }
+      return c.json({ error: (err as Error).message }, 400);
+    }
+  });
+
+  app.delete('/api/roles/:name', (c) => {
+    roles.delete(c.req.param('name'));
+    return c.body(null, 204);
+  });
 
   app.get('/api/rules', (c) => c.json({ rules: rules.list() }));
 
