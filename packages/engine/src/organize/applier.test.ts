@@ -415,6 +415,101 @@ describe('applyApprovedBatch', () => {
     expect(op.destPath).toBe(expectedFinal);
   });
 
+  it('aborts batch when destination drives lack free space (5% safety margin)', async () => {
+    const drives = new DriveRepo(db);
+    const d1Root = join(dir, 'd1');
+    const d2Root = join(dir, 'd2');
+    mkdirSync(d1Root, { recursive: true });
+    mkdirSync(d2Root, { recursive: true });
+    const d1 = drives.upsert({
+      volumeSerial: 'V1',
+      label: 'D1',
+      currentLetter: null,
+      mountPath: null,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1_000_000_000,
+      freeBytes: 1_000_000_000,
+    }).id;
+    const d2 = drives.upsert({
+      volumeSerial: 'V2',
+      label: 'D2',
+      currentLetter: null,
+      mountPath: null,
+      kind: 'local',
+      roles: [],
+      totalBytes: 200_000_000,
+      freeBytes: 100_000_000,
+    }).id;
+    db.prepare(
+      `INSERT INTO scans (id, drive_id, started_at, status, throttle_profile) VALUES (?, ?, ?, ?, ?)`,
+    ).run('s-tight', d1, new Date().toISOString(), 'completed', 'balanced');
+
+    const srcPath = join(d1Root, 'a.bin');
+    writeFileSync(srcPath, 'x');
+    new FilesRepo(db).upsertOne({
+      driveId: d1,
+      path: srcPath,
+      name: 'a.bin',
+      extension: 'bin',
+      sizeBytes: 1,
+      category: 'image',
+      sha256: 'h',
+      mtime: '2024-01-01T00:00:00.000Z',
+      ctime: '2024-01-01T00:00:00.000Z',
+      exifDate: null,
+      dateSource: 'mtime',
+      width: null,
+      height: null,
+      durationSeconds: null,
+      ntfsFileId: null,
+      state: 'indexed',
+      scanId: 's-tight',
+    });
+    const fileId = (db.prepare(`SELECT id FROM files WHERE path = ?`).get(srcPath) as { id: number }).id;
+
+    const planned: PlannedOperation[] = [
+      {
+        fileId,
+        ruleId: 'r',
+        sourceDriveId: d1,
+        sourcePath: srcPath,
+        destDriveId: d2,
+        destPath: join(d2Root, 'a.bin'),
+        kind: 'cross-drive-move',
+        estimatedBytes: 500_000_000,
+      },
+    ];
+
+    await expect(
+      applyApprovedBatch({
+        db,
+        description: 'over capacity',
+        operations: planned,
+        driveRoots: new Map([
+          [d1, d1Root],
+          [d2, d2Root],
+        ]),
+        chunkBytes: 1024,
+      }),
+    ).rejects.toThrow(/insufficient free space on D2/);
+
+    expect(existsSync(srcPath)).toBe(true);
+    expect(existsSync(join(d2Root, 'a.bin'))).toBe(false);
+
+    const batches = db
+      .prepare(`SELECT status, summary FROM batches WHERE description = ?`)
+      .all('over capacity') as { status: string; summary: string }[];
+    expect(batches).toHaveLength(1);
+    expect(batches[0]!.status).toBe('failed');
+    expect(JSON.parse(batches[0]!.summary).reason).toBe('insufficient free space');
+
+    const ops = db
+      .prepare(`SELECT id FROM operations WHERE batch_id = (SELECT id FROM batches WHERE description = ?)`)
+      .all('over capacity');
+    expect(ops).toHaveLength(0);
+  });
+
   it('records completed-via-existing when destination already has identical content', async () => {
     const driveId = seedDrive('V');
     seedScan(driveId);
