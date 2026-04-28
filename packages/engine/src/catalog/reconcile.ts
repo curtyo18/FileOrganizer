@@ -48,7 +48,7 @@ export async function reconcileOnStartup(db: Catalog): Promise<ReconcileResult> 
   }
 
   const touchedBatches = db
-    .prepare(`SELECT DISTINCT batch_id FROM batches WHERE status = 'in-progress'`)
+    .prepare(`SELECT id AS batch_id FROM batches WHERE status = 'in-progress'`)
     .all() as Array<{ batch_id: string }>;
 
   for (const { batch_id } of touchedBatches) {
