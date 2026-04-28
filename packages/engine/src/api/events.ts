@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import type { ThrottleProfileName } from '@fileorganizer/shared';
 
 export interface ScanProgressEvent {
   type: 'scan-progress';
@@ -15,7 +16,12 @@ export interface BatchStatusEvent {
   status: string;
 }
 
-export type EngineEvent = ScanProgressEvent | BatchStatusEvent;
+export interface ThrottleChangedEvent {
+  type: 'throttle-changed';
+  profile: ThrottleProfileName;
+}
+
+export type EngineEvent = ScanProgressEvent | BatchStatusEvent | ThrottleChangedEvent;
 
 export class EventBus extends EventEmitter {
   publish(event: EngineEvent): void {

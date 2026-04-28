@@ -4,6 +4,8 @@ import { migrate } from '../catalog/migrate.js';
 import { SettingsRepo } from '../catalog/settings-repo.js';
 import { seedDefaultRules } from '../rules/defaults.js';
 import { seedDefaultRoles } from '../roles/defaults.js';
+import { ThrottleManager } from '../throttle/manager.js';
+import { ThrottleScheduler } from '../throttle/scheduler.js';
 import { createServer } from '../api/server.js';
 
 export interface ServeCliOptions {
@@ -34,6 +36,20 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
   seedDefaultRules(db);
   const server = await createServer({ db, port: opts.port ?? 0, hostname: '127.0.0.1' });
   writePointer(opts.pointerPath, { catalogPath: ptr.catalogPath, uiPort: server.port });
+
+  const settings = new SettingsRepo(db).load();
+  const throttleManager = new ThrottleManager(
+    settings.throttleProfiles,
+    'balanced',
+    settings.throttleSchedule,
+  );
+  const scheduler = new ThrottleScheduler({
+    manager: throttleManager,
+    events: server.events,
+    intervalMs: 60_000,
+  });
+  scheduler.start();
+
   const url = `http://127.0.0.1:${server.port}`;
   console.log('');
   console.log('  FileOrganizer is ready');
@@ -44,6 +60,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
 
   await new Promise<void>((resolve) => {
     const shutdown = async () => {
+      scheduler.stop();
       await server.close();
       closeCatalog(db);
       resolve();
