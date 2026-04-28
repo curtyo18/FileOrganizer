@@ -152,7 +152,7 @@ export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
       }
     }
 
-    filesRepo.markMissing(opts.driveId, scan.id);
+    filesRepo.markMissing(opts.driveId, scan.id, opts.roots);
     scansRepo.updateProgress(scan.id, {
       lastCompletedDirectory: lastDir,
       filesSeen,

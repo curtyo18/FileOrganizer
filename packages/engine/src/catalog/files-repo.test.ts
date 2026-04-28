@@ -95,15 +95,70 @@ describe('FilesRepo', () => {
     expect(repo.quickCheck(driveId, '/x.jpg', 1, '2024-01-01T00:00:00.000Z').kind).toBe('new');
   });
 
-  it('markMissing flips state for files not seen in current scan', () => {
+  it('markMissing flips state for files not seen in current scan within roots', () => {
     const repo = new FilesRepo(db);
-    repo.upsertOne(input('/a.jpg', 'h1', '2024-01-01T00:00:00.000Z'));
+    repo.upsertOne(input('/x/a/foo.jpg', 'h1', '2024-01-01T00:00:00.000Z'));
     const newScanId = 'test-scan-2';
     db.prepare(
       `INSERT INTO scans (id, drive_id, started_at, status, throttle_profile) VALUES (?, ?, ?, ?, ?)`,
     ).run(newScanId, driveId, new Date().toISOString(), 'running', 'balanced');
-    repo.markMissing(driveId, newScanId);
-    const row = repo.findByPath(driveId, '/a.jpg');
+    repo.markMissing(driveId, newScanId, ['/x/a']);
+    const row = repo.findByPath(driveId, '/x/a/foo.jpg');
     expect(row!.state).toBe('missing');
+  });
+
+  it('markMissing leaves files outside the scanned roots untouched', () => {
+    const repo = new FilesRepo(db);
+    // Indexed by an earlier scan on /x/a
+    repo.upsertOne({
+      ...input('/x/a/foo.jpg', 'h1', '2024-01-01T00:00:00.000Z'),
+      scanId,
+    });
+    // Now run a scan rooted at /x/b (different scan id)
+    const newScanId = 'test-scan-2';
+    db.prepare(
+      `INSERT INTO scans (id, drive_id, started_at, status, throttle_profile) VALUES (?, ?, ?, ?, ?)`,
+    ).run(newScanId, driveId, new Date().toISOString(), 'running', 'balanced');
+    repo.markMissing(driveId, newScanId, ['/x/b']);
+    const row = repo.findByPath(driveId, '/x/a/foo.jpg');
+    expect(row!.state).toBe('indexed');
+  });
+
+  it('markMissing only flips files removed between two scans of the same root', () => {
+    const repo = new FilesRepo(db);
+    repo.upsertOne(input('/x/a/keep.jpg', 'h1', '2024-01-01T00:00:00.000Z'));
+    repo.upsertOne(input('/x/a/gone.jpg', 'h2', '2024-01-01T00:00:00.000Z'));
+    const newScanId = 'test-scan-2';
+    db.prepare(
+      `INSERT INTO scans (id, drive_id, started_at, status, throttle_profile) VALUES (?, ?, ?, ?, ?)`,
+    ).run(newScanId, driveId, new Date().toISOString(), 'running', 'balanced');
+    // Re-see only the keep file under the same scan
+    repo.upsertOne({ ...input('/x/a/keep.jpg', 'h1', '2024-01-01T00:00:00.000Z'), scanId: newScanId });
+    repo.markMissing(driveId, newScanId, ['/x/a']);
+    expect(repo.findByPath(driveId, '/x/a/keep.jpg')!.state).toBe('indexed');
+    expect(repo.findByPath(driveId, '/x/a/gone.jpg')!.state).toBe('missing');
+  });
+
+  it('markMissing with empty scanRoots is a no-op', () => {
+    const repo = new FilesRepo(db);
+    repo.upsertOne(input('/x/a/foo.jpg', 'h1', '2024-01-01T00:00:00.000Z'));
+    const newScanId = 'test-scan-2';
+    db.prepare(
+      `INSERT INTO scans (id, drive_id, started_at, status, throttle_profile) VALUES (?, ?, ?, ?, ?)`,
+    ).run(newScanId, driveId, new Date().toISOString(), 'running', 'balanced');
+    const changes = repo.markMissing(driveId, newScanId, []);
+    expect(changes).toBe(0);
+    expect(repo.findByPath(driveId, '/x/a/foo.jpg')!.state).toBe('indexed');
+  });
+
+  it('markMissing path-prefix does not match sibling roots with shared prefix', () => {
+    const repo = new FilesRepo(db);
+    repo.upsertOne(input('/x/foobar/a.jpg', 'h1', '2024-01-01T00:00:00.000Z'));
+    const newScanId = 'test-scan-2';
+    db.prepare(
+      `INSERT INTO scans (id, drive_id, started_at, status, throttle_profile) VALUES (?, ?, ?, ?, ?)`,
+    ).run(newScanId, driveId, new Date().toISOString(), 'running', 'balanced');
+    repo.markMissing(driveId, newScanId, ['/x/foo']);
+    expect(repo.findByPath(driveId, '/x/foobar/a.jpg')!.state).toBe('indexed');
   });
 });

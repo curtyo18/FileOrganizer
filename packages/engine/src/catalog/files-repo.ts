@@ -92,13 +92,21 @@ export class FilesRepo {
     return row ? toRecord(row) : null;
   }
 
-  markMissing(driveId: string, currentScanId: string): number {
-    const result = this.db
-      .prepare(
-        `UPDATE files SET state = 'missing'
-         WHERE drive_id = ? AND scan_id != ? AND state = 'indexed'`,
-      )
-      .run(driveId, currentScanId);
+  markMissing(driveId: string, currentScanId: string, scanRoots: string[]): number {
+    if (scanRoots.length === 0) return 0;
+    const clauses: string[] = [];
+    const params: (string | number)[] = [driveId, currentScanId];
+    for (const raw of scanRoots) {
+      const trimmed = raw.replace(/[/\\]+$/, '');
+      clauses.push('path LIKE ?');
+      params.push(trimmed + '/%');
+      clauses.push('path LIKE ?');
+      params.push(trimmed + '\\%');
+    }
+    const sql = `UPDATE files SET state = 'missing'
+       WHERE drive_id = ? AND scan_id != ? AND state = 'indexed'
+         AND (${clauses.join(' OR ')})`;
+    const result = this.db.prepare(sql).run(...params);
     return result.changes;
   }
 }
