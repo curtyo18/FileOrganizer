@@ -4,6 +4,7 @@ import type {
   OperationRecord,
   RoleDefinition,
   Rule,
+  Settings,
 } from '@fileorganizer/shared';
 
 export interface PlannedOperationUI {
@@ -149,6 +150,25 @@ export class ApiClient {
     });
     if (!res.ok) throw new Error(`restore failed: ${res.status}`);
     return res.json() as Promise<{ restored: number; errors: string[] }>;
+  }
+
+  async getSettings(): Promise<Settings> {
+    const data = await this.get<{ settings: Settings }>('/api/settings');
+    return data.settings;
+  }
+
+  async saveSettings(settings: Settings): Promise<Settings> {
+    const res = await fetch(`${this.opts.baseUrl}/api/settings`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ settings }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`saveSettings: ${res.status} ${body}`);
+    }
+    const body = (await res.json()) as { settings: Settings };
+    return body.settings;
   }
 
   async listRoles(): Promise<RoleDefinition[]> {

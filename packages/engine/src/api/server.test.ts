@@ -106,6 +106,71 @@ describe('API server', () => {
   });
 });
 
+describe('settings endpoints', () => {
+  it('round-trips settings via GET and PUT', async () => {
+    const base = `http://127.0.0.1:${handle.port}/api/settings`;
+    const initial = await fetch(base);
+    expect(initial.status).toBe(200);
+    const body = (await initial.json()) as {
+      settings: { throttleProfiles: { idle: { localHashWorkers: number } } };
+    };
+    expect(body.settings.throttleProfiles.idle.localHashWorkers).toBeGreaterThanOrEqual(1);
+
+    const next = {
+      ...body.settings,
+      throttleProfiles: {
+        ...body.settings.throttleProfiles,
+        idle: { ...body.settings.throttleProfiles.idle, localHashWorkers: 7 },
+      },
+    };
+    const put = await fetch(base, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ settings: next }),
+    });
+    expect(put.status).toBe(200);
+
+    const after = await fetch(base);
+    const afterBody = (await after.json()) as {
+      settings: { throttleProfiles: { idle: { localHashWorkers: number } } };
+    };
+    expect(afterBody.settings.throttleProfiles.idle.localHashWorkers).toBe(7);
+  });
+
+  it('invokes onSettingsChanged when settings are saved', async () => {
+    const calls: number[] = [];
+    const localDb = openCatalog(join(dir, 'cb.db'));
+    migrate(localDb);
+    const cbHandle = await createServer({
+      db: localDb,
+      port: 0,
+      hostname: '127.0.0.1',
+      onSettingsChanged: (s) => calls.push(s.throttleProfiles.idle.localHashWorkers),
+    });
+    try {
+      const initial = await (
+        await fetch(`http://127.0.0.1:${cbHandle.port}/api/settings`)
+      ).json() as { settings: { throttleProfiles: { idle: { localHashWorkers: number } } } };
+      const next = {
+        ...initial.settings,
+        throttleProfiles: {
+          ...initial.settings.throttleProfiles,
+          idle: { ...initial.settings.throttleProfiles.idle, localHashWorkers: 13 },
+        },
+      };
+      await fetch(`http://127.0.0.1:${cbHandle.port}/api/settings`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ settings: next }),
+      });
+      expect(calls).toEqual([13]);
+    } finally {
+      await cbHandle.close();
+      closeCatalog(localDb);
+    }
+  });
+});
+
 describe('rules endpoints', () => {
   it('round-trips a rule through POST/GET/PUT/DELETE', async () => {
     const base = `http://127.0.0.1:${handle.port}/api/rules`;

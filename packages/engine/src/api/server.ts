@@ -21,13 +21,14 @@ import { RolesRepo, type CreateRoleInput, type UpdateRoleInput } from '../roles/
 import { planOrganize, type PlannedOperation } from '../organize/planner.js';
 import { applyApprovedBatch, autoApply } from '../organize/applier.js';
 import { undoBatch } from '../organize/undo.js';
-import { RuleError } from '@fileorganizer/shared';
+import { RuleError, type Settings } from '@fileorganizer/shared';
 import { EventBus } from './events.js';
 
 export interface CreateServerOptions {
   db: Catalog;
   port: number;
   hostname: string;
+  onSettingsChanged?: (settings: Settings) => void;
 }
 
 export interface ServerHandle {
@@ -229,6 +230,16 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   const rules = new RulesRepo(opts.db);
   const roles = new RolesRepo(opts.db);
   const batches = new BatchesRepo(opts.db);
+  const settingsRepo = new SettingsRepo(opts.db);
+
+  app.get('/api/settings', (c) => c.json({ settings: settingsRepo.load() }));
+
+  app.put('/api/settings', async (c) => {
+    const body = (await c.req.json()) as { settings: Settings };
+    settingsRepo.save(body.settings);
+    opts.onSettingsChanged?.(body.settings);
+    return c.json({ settings: body.settings });
+  });
 
   app.get('/api/roles', (c) => c.json({ roles: roles.list() }));
 

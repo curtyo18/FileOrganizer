@@ -74,6 +74,7 @@ export function Sidebar(props: SidebarProps) {
       highlight: true,
     },
     null,
+    { id: 'throttle', href: '/throttle', label: 'Throttle', icon: 'scan', kbd: 'g t' },
     { id: 'history', href: '/history', label: 'History', icon: 'history', kbd: 'g h' },
     {
       id: 'quarantine',

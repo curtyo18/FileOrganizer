@@ -34,16 +34,37 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
   migrate(db);
   seedDefaultRoles(db);
   seedDefaultRules(db);
-  const server = await createServer({ db, port: opts.port ?? 0, hostname: '127.0.0.1' });
+
+  let throttleManager = new ThrottleManager(
+    new SettingsRepo(db).load().throttleProfiles,
+    'balanced',
+    new SettingsRepo(db).load().throttleSchedule,
+  );
+  let scheduler: ThrottleScheduler | null = null;
+
+  const server = await createServer({
+    db,
+    port: opts.port ?? 0,
+    hostname: '127.0.0.1',
+    onSettingsChanged: (next) => {
+      const activeProfile = throttleManager.current().name;
+      throttleManager = new ThrottleManager(
+        next.throttleProfiles,
+        activeProfile,
+        next.throttleSchedule,
+      );
+      scheduler?.stop();
+      scheduler = new ThrottleScheduler({
+        manager: throttleManager,
+        events: server.events,
+        intervalMs: 60_000,
+      });
+      scheduler.start();
+    },
+  });
   writePointer(opts.pointerPath, { catalogPath: ptr.catalogPath, uiPort: server.port });
 
-  const settings = new SettingsRepo(db).load();
-  const throttleManager = new ThrottleManager(
-    settings.throttleProfiles,
-    'balanced',
-    settings.throttleSchedule,
-  );
-  const scheduler = new ThrottleScheduler({
+  scheduler = new ThrottleScheduler({
     manager: throttleManager,
     events: server.events,
     intervalMs: 60_000,
@@ -60,7 +81,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
 
   await new Promise<void>((resolve) => {
     const shutdown = async () => {
-      scheduler.stop();
+      scheduler?.stop();
       await server.close();
       closeCatalog(db);
       resolve();

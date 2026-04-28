@@ -11,6 +11,7 @@ import { Browse } from './routes/browse.js';
 import { Duplicates } from './routes/duplicates.js';
 import { Organize } from './routes/organize.js';
 import { Roles } from './routes/roles.js';
+import { Throttle } from './routes/throttle.js';
 import { History } from './routes/history.js';
 import { Quarantine } from './routes/quarantine.js';
 
@@ -62,6 +63,7 @@ export function App() {
             <Route path="/duplicates" component={Duplicates} />
             <Route path="/organize" component={Organize} />
             <Route path="/roles" component={Roles} />
+            <Route path="/throttle" component={Throttle} />
             <Route path="/history" component={History} />
             <Route path="/quarantine" component={Quarantine} />
           </Router>
