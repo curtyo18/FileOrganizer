@@ -13,6 +13,8 @@ function isEditableTarget(target: EventTarget | null): boolean {
   if (target instanceof HTMLTextAreaElement) return true;
   if (target instanceof HTMLSelectElement) return true;
   if (target.isContentEditable) return true;
+  const ce = target.getAttribute('contenteditable');
+  if (ce === '' || ce === 'true' || ce === 'plaintext-only') return true;
   return false;
 }
 
