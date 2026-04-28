@@ -1,12 +1,20 @@
 import { createReadStream, createWriteStream, mkdirSync } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { dirname } from 'node:path';
-import { IntegrityError } from '@fileorganizer/shared';
+import { DriveError, IntegrityError } from '@fileorganizer/shared';
 import type { Catalog } from '../catalog/connection.js';
 import { hashFile } from '../scan/hasher.js';
 import { quarantineFile } from '../quarantine/quarantine.js';
 import { resolveCollision } from './collision.js';
 import type { MoveOutcome } from './move-same-drive.js';
+
+const DISCONNECT_CODES = new Set([
+  'ENOENT',
+  'EBUSY',
+  'ETIMEDOUT',
+  'ECONNRESET',
+  'ENETUNREACH',
+]);
 
 export interface MoveCrossDriveInput {
   db: Catalog;
@@ -50,7 +58,19 @@ export async function moveCrossDrive(input: MoveCrossDriveInput): Promise<MoveOu
 
   const finalDestPath = decision.path;
   mkdirSync(dirname(finalDestPath), { recursive: true });
-  await pipeline(createReadStream(row.path), createWriteStream(finalDestPath));
+  try {
+    await pipeline(createReadStream(row.path), createWriteStream(finalDestPath));
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code && DISCONNECT_CODES.has(code)) {
+      throw new DriveError(
+        'DRIVE_DISCONNECTED',
+        `cross-drive copy failed: ${code}`,
+        err,
+      );
+    }
+    throw err;
+  }
 
   const liveHash = await hashFile(finalDestPath, {
     chunkBytes: input.chunkBytes,

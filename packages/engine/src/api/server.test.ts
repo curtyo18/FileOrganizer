@@ -474,6 +474,94 @@ describe('plan + apply + undo endpoints', () => {
     expect(Array.isArray(body.unresolvedRoles)).toBe(true);
   });
 
+  it('returns 503 when a cross-drive apply hits a DriveError (disconnected drive)', async () => {
+    const { mkdirSync, writeFileSync, rmSync } = await import('node:fs');
+    const sourceRoot = join(dir, 'src-root');
+    const destRoot = join(dir, 'dst-root');
+    mkdirSync(sourceRoot, { recursive: true });
+    mkdirSync(destRoot, { recursive: true });
+    const srcFile = join(sourceRoot, 'p.jpg');
+    writeFileSync(srcFile, 'payload');
+
+    const { DriveRepo } = await import('../drives/repo.js');
+    const drives = new DriveRepo(db);
+    const sourceDrive = drives.upsert({
+      volumeSerial: 'API-SRC',
+      label: 'API-SRC',
+      currentLetter: null,
+      mountPath: null,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1_000_000_000,
+      freeBytes: 900_000_000,
+    });
+    const destDrive = drives.upsert({
+      volumeSerial: 'API-NAS',
+      label: 'API-NAS',
+      currentLetter: null,
+      mountPath: null,
+      kind: 'network',
+      roles: [],
+      totalBytes: 1_000_000_000,
+      freeBytes: 900_000_000,
+    });
+
+    db.prepare(
+      `INSERT INTO scans (id, drive_id, started_at, status, throttle_profile)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run('api-scan', sourceDrive.id, new Date().toISOString(), 'completed', 'idle');
+    const { FilesRepo } = await import('../catalog/files-repo.js');
+    new FilesRepo(db).upsertOne({
+      driveId: sourceDrive.id,
+      path: srcFile,
+      name: 'p.jpg',
+      extension: 'jpg',
+      sizeBytes: 7,
+      category: 'image',
+      sha256: 'abc',
+      mtime: '2024-01-01T00:00:00.000Z',
+      ctime: '2024-01-01T00:00:00.000Z',
+      exifDate: null,
+      dateSource: 'mtime',
+      width: null,
+      height: null,
+      durationSeconds: null,
+      ntfsFileId: null,
+      state: 'indexed',
+      scanId: 'api-scan',
+    });
+    const fileId = (db.prepare(`SELECT id FROM files WHERE path = ?`).get(srcFile) as { id: number })
+      .id;
+
+    rmSync(srcFile);
+
+    const applyRes = await fetch(`http://127.0.0.1:${handle.port}/api/organize/apply`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        description: 'nas-disconnect',
+        operations: [
+          {
+            fileId,
+            ruleId: 'r-api',
+            sourceDriveId: sourceDrive.id,
+            sourcePath: srcFile,
+            destDriveId: destDrive.id,
+            destPath: join(destRoot, 'p.jpg'),
+            kind: 'cross-drive-move',
+            estimatedBytes: 7,
+          },
+        ],
+        driveRoots: { [sourceDrive.id]: sourceRoot, [destDrive.id]: destRoot },
+      }),
+    });
+
+    expect(applyRes.status).toBe(503);
+    const body = (await applyRes.json()) as { code: string; error: string };
+    expect(body.code).toBe('DRIVE_DISCONNECTED');
+    expect(body.error).toMatch(/ENOENT/);
+  });
+
   it('plan output reflects role priority changes from the catalog', async () => {
     const { mkdirSync, writeFileSync } = await import('node:fs');
     const photosDir = join(dir, 'priority-photos');

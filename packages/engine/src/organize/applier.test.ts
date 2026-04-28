@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { DriveError } from '@fileorganizer/shared';
 import { openCatalog, closeCatalog, type Catalog } from '../catalog/connection.js';
 import { migrate } from '../catalog/migrate.js';
 import { DriveRepo } from '../drives/repo.js';
@@ -508,6 +509,76 @@ describe('applyApprovedBatch', () => {
       .prepare(`SELECT id FROM operations WHERE batch_id = (SELECT id FROM batches WHERE description = ?)`)
       .all('over capacity');
     expect(ops).toHaveLength(0);
+  });
+
+  it('aborts the batch as DriveError when a cross-drive copy hits a disconnect-class errno', async () => {
+    const sourceDriveId = seedDrive('SRC');
+    const destDriveId = seedDrive('NAS');
+    seedScan(sourceDriveId);
+    const ruleId = seedRule('cross-drive-review');
+    const sourceRoot = resolve(dir, 'SRC');
+    const destRoot = resolve(dir, 'NAS');
+    const goneSource = resolve(sourceRoot, 'gone.jpg');
+    const realSource = resolve(sourceRoot, 'still-here.jpg');
+    const goneFileId = seedFile(sourceDriveId, goneSource, 'gone-bytes');
+    const realFileId = seedFile(sourceDriveId, realSource, 'real-bytes');
+    rmSync(goneSource);
+
+    const ops: PlannedOperation[] = [
+      plannedOp(
+        goneFileId,
+        ruleId,
+        'cross-drive-move',
+        sourceDriveId,
+        goneSource,
+        destDriveId,
+        resolve(destRoot, 'gone.jpg'),
+      ),
+      plannedOp(
+        realFileId,
+        ruleId,
+        'cross-drive-move',
+        sourceDriveId,
+        realSource,
+        destDriveId,
+        resolve(destRoot, 'still-here.jpg'),
+      ),
+    ];
+
+    let caught: unknown;
+    try {
+      await applyApprovedBatch({
+        db,
+        description: 'nas-flap',
+        operations: ops,
+        driveRoots: new Map([
+          [sourceDriveId, sourceRoot],
+          [destDriveId, destRoot],
+        ]),
+        chunkBytes: 64 * 1024,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(DriveError);
+    expect((caught as DriveError).code).toBe('DRIVE_DISCONNECTED');
+
+    const batch = db
+      .prepare(`SELECT id, status, summary FROM batches WHERE description = ?`)
+      .get('nas-flap') as { id: string; status: string; summary: string };
+    expect(batch.status).toBe('failed');
+    const summary = JSON.parse(batch.summary) as Record<string, unknown>;
+    expect(summary['disconnectedDrive']).toBe('NAS');
+    expect(summary['errorCode']).toBe('DRIVE_DISCONNECTED');
+
+    const ledgerOps = db
+      .prepare(`SELECT status FROM operations WHERE batch_id = ? ORDER BY id`)
+      .all(batch.id) as { status: string }[];
+    expect(ledgerOps).toHaveLength(1);
+    expect(ledgerOps[0]!.status).toBe('failed');
+
+    expect(existsSync(realSource)).toBe(true);
+    expect(existsSync(resolve(destRoot, 'still-here.jpg'))).toBe(false);
   });
 
   it('records completed-via-existing when destination already has identical content', async () => {

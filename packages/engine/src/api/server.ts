@@ -21,7 +21,7 @@ import { RolesRepo, type CreateRoleInput, type UpdateRoleInput } from '../roles/
 import { planOrganize, type PlannedOperation } from '../organize/planner.js';
 import { applyApprovedBatch, autoApply } from '../organize/applier.js';
 import { undoBatch } from '../organize/undo.js';
-import { RuleError, type Settings } from '@fileorganizer/shared';
+import { DriveError, RuleError, type Settings } from '@fileorganizer/shared';
 import { EventBus } from './events.js';
 
 export interface CreateServerOptions {
@@ -315,20 +315,27 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       operations: PlannedOperation[];
       driveRoots?: Record<string, string>;
     };
-    const result = await autoApply({
-      db: opts.db,
-      operations: body.operations,
-      driveRoots: mergeDriveRoots(drives, body.driveRoots ?? {}),
-      chunkBytes: 1024 * 1024,
-    });
-    if (result.autoBatchId) {
-      events.publish({
-        type: 'batch-status',
-        batchId: result.autoBatchId,
-        status: 'completed',
+    try {
+      const result = await autoApply({
+        db: opts.db,
+        operations: body.operations,
+        driveRoots: mergeDriveRoots(drives, body.driveRoots ?? {}),
+        chunkBytes: 1024 * 1024,
       });
+      if (result.autoBatchId) {
+        events.publish({
+          type: 'batch-status',
+          batchId: result.autoBatchId,
+          status: 'completed',
+        });
+      }
+      return c.json(result);
+    } catch (err) {
+      if (err instanceof DriveError) {
+        return c.json({ error: err.message, code: err.code }, 503);
+      }
+      throw err;
     }
-    return c.json(result);
   });
 
   app.post('/api/organize/apply', async (c) => {
@@ -338,20 +345,27 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       driveRoots?: Record<string, string>;
       dryRun?: boolean;
     };
-    const result = await applyApprovedBatch({
-      db: opts.db,
-      description: body.description,
-      operations: body.operations,
-      driveRoots: mergeDriveRoots(drives, body.driveRoots ?? {}),
-      chunkBytes: 1024 * 1024,
-      dryRun: body.dryRun === true,
-    });
-    events.publish({
-      type: 'batch-status',
-      batchId: result.batchId,
-      status: result.failed === 0 ? 'completed' : 'failed',
-    });
-    return c.json(result);
+    try {
+      const result = await applyApprovedBatch({
+        db: opts.db,
+        description: body.description,
+        operations: body.operations,
+        driveRoots: mergeDriveRoots(drives, body.driveRoots ?? {}),
+        chunkBytes: 1024 * 1024,
+        dryRun: body.dryRun === true,
+      });
+      events.publish({
+        type: 'batch-status',
+        batchId: result.batchId,
+        status: result.failed === 0 ? 'completed' : 'failed',
+      });
+      return c.json(result);
+    } catch (err) {
+      if (err instanceof DriveError) {
+        return c.json({ error: err.message, code: err.code }, 503);
+      }
+      throw err;
+    }
   });
 
   app.post('/api/organize/undo/:batchId', async (c) => {

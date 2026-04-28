@@ -1,4 +1,4 @@
-import { IntegrityError } from '@fileorganizer/shared';
+import { DriveError, IntegrityError } from '@fileorganizer/shared';
 import type { Catalog } from '../catalog/connection.js';
 import { BatchesRepo } from '../catalog/batches-repo.js';
 import { DriveRepo } from '../drives/repo.js';
@@ -133,6 +133,19 @@ async function runBatch(input: ApplyApprovedBatchInput): Promise<ApplyApprovedBa
         errorMessage: (err as Error).message,
       });
       failed += 1;
+
+      if (err instanceof DriveError) {
+        const driveLabel =
+          new DriveRepo(input.db).findById(op.destDriveId)?.label ?? op.destDriveId;
+        batches.finish(batch.id, 'failed', {
+          completed,
+          failed,
+          disconnectedDrive: driveLabel,
+          errorCode: err.code,
+          error: err.message,
+        });
+        throw err;
+      }
     }
   }
 

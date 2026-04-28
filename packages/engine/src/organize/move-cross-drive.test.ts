@@ -16,7 +16,7 @@ import { openCatalog, closeCatalog, type Catalog } from '../catalog/connection.j
 import { migrate } from '../catalog/migrate.js';
 import { DriveRepo } from '../drives/repo.js';
 import { FilesRepo } from '../catalog/files-repo.js';
-import { IntegrityError } from '@fileorganizer/shared';
+import { DriveError, IntegrityError } from '@fileorganizer/shared';
 import { moveCrossDrive } from './move-cross-drive.js';
 
 let dir: string;
@@ -184,6 +184,33 @@ describe('moveCrossDrive', () => {
       .prepare(`SELECT state FROM files WHERE id = ?`)
       .get(fileId) as { state: string };
     expect(row.state).toBe('quarantined');
+  });
+
+  it('re-throws as DriveError(DRIVE_DISCONNECTED) when source vanishes mid-pipeline (ENOENT)', async () => {
+    const sourceRoot = resolve(dir, 'SRC');
+    const destRoot = resolve(dir, 'DST');
+    const sourcePath = resolve(sourceRoot, 'a.jpg');
+    const destPath = resolve(destRoot, 'Photos', 'a.jpg');
+    const fileId = seedFile(sourcePath, 'payload', sourceDriveId);
+    rmSync(sourcePath);
+
+    let caught: unknown;
+    try {
+      await moveCrossDrive({
+        db,
+        fileId,
+        destPath,
+        destDriveId,
+        sourceDriveRoot: sourceRoot,
+        batchId,
+        chunkBytes: 64 * 1024,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(DriveError);
+    expect((caught as DriveError).code).toBe('DRIVE_DISCONNECTED');
+    expect((caught as DriveError).message).toContain('ENOENT');
   });
 
   it('writes to a suffixed destination when the original destination has different content', async () => {
