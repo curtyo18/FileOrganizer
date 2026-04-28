@@ -1,5 +1,12 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createHash } from 'node:crypto';
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual };
+});
+
+import * as fs from 'node:fs';
 import {
   existsSync,
   mkdtempSync,
@@ -243,5 +250,93 @@ describe('undoBatch', () => {
     await expect(
       undoBatch({ db, batchId: 'nope', driveRoots: new Map() }),
     ).rejects.toThrow(/nope/);
+  });
+
+  it('rolls back source restore when dest unlink fails on cross-drive undo', async () => {
+    const sourceDriveId = seedDrive('SRC');
+    const destDriveId = seedDrive('DST');
+    seedScan(sourceDriveId);
+    const ruleId = seedRule();
+    const sourceRoot = resolve(dir, 'SRC');
+    const destRoot = resolve(dir, 'DST');
+    const sourcePath = resolve(sourceRoot, 'a.jpg');
+    const destPath = resolve(destRoot, 'Photos', 'a.jpg');
+    const fileId = seedFile(sourceDriveId, sourcePath, 'content');
+
+    const apply = await applyApprovedBatch({
+      db,
+      description: 'forward',
+      operations: [
+        plannedOp(
+          fileId,
+          ruleId,
+          'cross-drive-move',
+          sourceDriveId,
+          sourcePath,
+          destDriveId,
+          destPath,
+        ),
+      ],
+      driveRoots: new Map([
+        [sourceDriveId, sourceRoot],
+        [destDriveId, destRoot],
+      ]),
+      chunkBytes: 64 * 1024,
+    });
+    expect(existsSync(destPath)).toBe(true);
+    expect(existsSync(sourcePath)).toBe(false);
+
+    const spy = vi.spyOn(fs, 'unlinkSync').mockImplementationOnce(() => {
+      const err = Object.assign(new Error('ENOENT: no such file or directory, unlink'), {
+        code: 'ENOENT',
+      });
+      throw err;
+    });
+
+    const undo = await undoBatch({
+      db,
+      batchId: apply.batchId,
+      driveRoots: new Map([
+        [sourceDriveId, sourceRoot],
+        [destDriveId, destRoot],
+      ]),
+    });
+
+    spy.mockRestore();
+
+    expect(undo.reverted).toBe(0);
+    expect(undo.skipped).toBe(1);
+    expect(undo.errors).toHaveLength(1);
+    expect(undo.errors[0]!.reason).toMatch(/could not remove dest/);
+
+    // Source should NOT be back at its original location — it must be re-quarantined.
+    expect(existsSync(sourcePath)).toBe(false);
+
+    // A fresh quarantine row exists for the original_path under this batch.
+    const qRow = db
+      .prepare(
+        `SELECT quarantine_path AS quarantinePath FROM quarantine
+         WHERE original_path = ? AND batch_id = ? ORDER BY id DESC LIMIT 1`,
+      )
+      .get(sourcePath, apply.batchId) as { quarantinePath: string } | undefined;
+    expect(qRow).toBeDefined();
+    expect(existsSync(qRow!.quarantinePath)).toBe(true);
+
+    // Catalog still points at dest (unchanged from the original move).
+    const file = db
+      .prepare(`SELECT path, drive_id AS driveId, state FROM files WHERE id = ?`)
+      .get(fileId) as { path: string; driveId: string; state: string };
+    expect(file.path).toBe(destPath);
+    expect(file.driveId).toBe(destDriveId);
+
+    // The failed undo op carries a descriptive error message.
+    const failedOp = db
+      .prepare(
+        `SELECT error_message AS errorMessage FROM operations
+         WHERE batch_id = ? AND status = 'failed' ORDER BY id DESC LIMIT 1`,
+      )
+      .get(undo.undoBatchId) as { errorMessage: string | null } | undefined;
+    expect(failedOp).toBeDefined();
+    expect(failedOp!.errorMessage).toMatch(/could not remove dest/);
   });
 });

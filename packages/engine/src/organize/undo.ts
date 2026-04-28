@@ -1,10 +1,10 @@
-import { existsSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
+import * as fs from 'node:fs';
 import { dirname } from 'node:path';
 import type { OperationRecord } from '@fileorganizer/shared';
 import { BatchesRepo } from '../catalog/batches-repo.js';
 import type { Catalog } from '../catalog/connection.js';
 import { hashFile } from '../scan/hasher.js';
-import { restoreFromQuarantine } from '../quarantine/quarantine.js';
+import { quarantineFile, restoreFromQuarantine } from '../quarantine/quarantine.js';
 
 export interface UndoOptions {
   db: Catalog;
@@ -56,7 +56,7 @@ export async function undoBatch(opts: UndoOptions): Promise<UndoResult> {
       const reason = (err as Error).message;
       errors.push({ operationId: op.id, reason });
       skipped += 1;
-      batches.recordOperation(undo.id, {
+      const failed = batches.recordOperation(undo.id, {
         kind: op.kind,
         fileId: op.fileId,
         sourceDriveId: op.destDriveId,
@@ -65,6 +65,7 @@ export async function undoBatch(opts: UndoOptions): Promise<UndoResult> {
         destPath: op.sourcePath,
         status: 'failed',
       });
+      batches.updateOperationStatus(failed.id, 'failed', { errorMessage: reason });
     }
   }
 
@@ -106,7 +107,7 @@ async function reverseSameDriveMove(
   if (!op.destPath || !op.sourcePath || op.fileId == null) {
     throw new Error('op missing fileId/source/dest');
   }
-  if (!existsSync(op.destPath)) {
+  if (!fs.existsSync(op.destPath)) {
     throw new Error(`destination ${op.destPath} no longer exists`);
   }
 
@@ -121,12 +122,12 @@ async function reverseSameDriveMove(
     throw new Error(`hash drift at ${op.destPath}`);
   }
 
-  if (existsSync(op.sourcePath)) {
+  if (fs.existsSync(op.sourcePath)) {
     throw new Error(`original path ${op.sourcePath} occupied`);
   }
 
-  mkdirSync(dirname(op.sourcePath), { recursive: true });
-  renameSync(op.destPath, op.sourcePath);
+  fs.mkdirSync(dirname(op.sourcePath), { recursive: true });
+  fs.renameSync(op.destPath, op.sourcePath);
   opts.db
     .prepare(`UPDATE files SET path = ?, state = 'indexed' WHERE id = ?`)
     .run(op.sourcePath, op.fileId);
@@ -152,7 +153,7 @@ async function reverseCrossDriveMove(
   if (!op.destPath || !op.sourcePath || op.fileId == null || !op.sourceDriveId) {
     throw new Error('op missing fileId/source/dest/sourceDriveId');
   }
-  if (!existsSync(op.destPath)) {
+  if (!fs.existsSync(op.destPath)) {
     throw new Error(`destination ${op.destPath} no longer exists`);
   }
 
@@ -170,18 +171,45 @@ async function reverseCrossDriveMove(
   const sourceRoot = opts.driveRoots.get(op.sourceDriveId);
   if (!sourceRoot) throw new Error(`no driveRoot for ${op.sourceDriveId}`);
 
-  const qRow = opts.db
+  const qSnapshot = opts.db
     .prepare(
-      `SELECT id FROM quarantine WHERE original_path = ? AND batch_id = ?
-       ORDER BY id DESC LIMIT 1`,
+      `SELECT id, original_size AS originalSize, original_sha256 AS originalSha256,
+              original_mtime AS originalMtime
+         FROM quarantine WHERE original_path = ? AND batch_id = ?
+         ORDER BY id DESC LIMIT 1`,
     )
-    .get(op.sourcePath, op.batchId) as { id: number } | undefined;
-  if (!qRow) {
+    .get(op.sourcePath, op.batchId) as
+    | { id: number; originalSize: number; originalSha256: string; originalMtime: string }
+    | undefined;
+  if (!qSnapshot) {
     throw new Error(`quarantine entry for ${op.sourcePath} not found`);
   }
 
-  restoreFromQuarantine({ db: opts.db, driveRoot: sourceRoot, quarantineId: qRow.id });
-  unlinkSync(op.destPath);
+  restoreFromQuarantine({ db: opts.db, driveRoot: sourceRoot, quarantineId: qSnapshot.id });
+  try {
+    fs.unlinkSync(op.destPath);
+  } catch (err) {
+    const reason = (err as Error).message;
+    try {
+      quarantineFile({
+        db: opts.db,
+        batchId: op.batchId,
+        driveId: op.sourceDriveId,
+        driveRoot: sourceRoot,
+        sourcePath: op.sourcePath,
+        sha256: qSnapshot.originalSha256,
+        sizeBytes: qSnapshot.originalSize,
+        mtime: qSnapshot.originalMtime,
+      });
+    } catch (rollbackErr) {
+      throw new Error(
+        `could not remove dest at ${op.destPath} after restoring source; rollback failed: ${(rollbackErr as Error).message} (original: ${reason})`,
+      );
+    }
+    throw new Error(
+      `could not remove dest at ${op.destPath} after restoring source; rolled back: ${reason}`,
+    );
+  }
   opts.db
     .prepare(`UPDATE files SET path = ?, drive_id = ?, state = 'indexed' WHERE id = ?`)
     .run(op.sourcePath, op.sourceDriveId, op.fileId);
