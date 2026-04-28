@@ -8,6 +8,7 @@ import { ThrottleManager } from '../throttle/manager.js';
 import { ThrottleScheduler } from '../throttle/scheduler.js';
 import { createServer } from '../api/server.js';
 import { reconcileOnStartup } from '../catalog/reconcile.js';
+import { Optimizer } from '../catalog/optimizer.js';
 
 export interface ServeCliOptions {
   pointerPath: string;
@@ -40,6 +41,10 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
   console.log(
     `Reconciled ${reconciled.scanned} in-progress operations (${reconciled.ambiguous} ambiguous)`,
   );
+
+  const optimizer = new Optimizer(db);
+  optimizer.runIfDue();
+  const optimizerHandle = optimizer.startInterval();
 
   let throttleManager = new ThrottleManager(
     new SettingsRepo(db).load().throttleProfiles,
@@ -88,6 +93,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
   await new Promise<void>((resolve) => {
     const shutdown = async () => {
       scheduler?.stop();
+      clearInterval(optimizerHandle);
       await server.close();
       closeCatalog(db);
       resolve();
