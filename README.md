@@ -38,7 +38,7 @@ uploaded anywhere. The catalog is a local SQLite file you own and can move.
 | M3 | Local web UI (Dashboard / Drives / Scans / Browse) | ✅ done |
 | M4 | Duplicates + Quarantine | ✅ done |
 | M5 | Rules engine + organize + undo | ✅ done |
-| M6 | Drive roles + throttle schedules | ⏳ |
+| M6 | Drive roles + throttle schedules | 🚧 in progress |
 | M7 | Polish, reconciliation, performance pass | ⏳ |
 
 See `docs/superpowers/plans/` for the full plan and `docs/superpowers/specs/`
