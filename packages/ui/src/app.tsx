@@ -10,6 +10,7 @@ import { Scans } from './routes/scans.js';
 import { Browse } from './routes/browse.js';
 import { Duplicates } from './routes/duplicates.js';
 import { Organize } from './routes/organize.js';
+import { Roles } from './routes/roles.js';
 import { History } from './routes/history.js';
 import { Quarantine } from './routes/quarantine.js';
 
@@ -24,11 +25,13 @@ export function App() {
   const [drives, setDrives] = useState<DriveRecord[]>([]);
   const [scans, setScans] = useState<ScanRecord[]>([]);
   const [ruleCount, setRuleCount] = useState<number>(0);
+  const [roleCount, setRoleCount] = useState<number>(0);
 
   const reloadGlobal = () => {
     api.listDrives().then(setDrives).catch(() => {});
     api.listScans().then((s) => setScans(s as ScanRecord[])).catch(() => {});
     api.listRules().then((rs) => setRuleCount(rs.length)).catch(() => {});
+    api.listRoles().then((rs) => setRoleCount(rs.length)).catch(() => {});
   };
 
   useEffect(() => {
@@ -46,6 +49,7 @@ export function App() {
         driveCount={drives.length}
         scanIsLive={scanIsLive}
         ruleCount={ruleCount}
+        roleCount={roleCount}
       />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
         <TopBar section={section} drives={drives} />
@@ -57,6 +61,7 @@ export function App() {
             <Route path="/browse" component={Browse} />
             <Route path="/duplicates" component={Duplicates} />
             <Route path="/organize" component={Organize} />
+            <Route path="/roles" component={Roles} />
             <Route path="/history" component={History} />
             <Route path="/quarantine" component={Quarantine} />
           </Router>

@@ -151,6 +151,50 @@ export class ApiClient {
     return res.json() as Promise<{ restored: number; errors: string[] }>;
   }
 
+  async listRoles(): Promise<RoleDefinition[]> {
+    const data = await this.get<{ roles: RoleDefinition[] }>('/api/roles');
+    return data.roles;
+  }
+
+  async createRole(input: RoleDefinition): Promise<RoleDefinition> {
+    const res = await fetch(`${this.opts.baseUrl}/api/roles`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`createRole: ${res.status} ${body}`);
+    }
+    const body = (await res.json()) as { role: RoleDefinition };
+    return body.role;
+  }
+
+  async updateRole(name: string, patch: Partial<Omit<RoleDefinition, 'name'>>): Promise<RoleDefinition> {
+    const res = await fetch(
+      `${this.opts.baseUrl}/api/roles/${encodeURIComponent(name)}`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(patch),
+      },
+    );
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`updateRole: ${res.status} ${body}`);
+    }
+    const body = (await res.json()) as { role: RoleDefinition };
+    return body.role;
+  }
+
+  async deleteRole(name: string): Promise<void> {
+    const res = await fetch(
+      `${this.opts.baseUrl}/api/roles/${encodeURIComponent(name)}`,
+      { method: 'DELETE' },
+    );
+    if (!res.ok && res.status !== 204) throw new Error(`deleteRole: ${res.status}`);
+  }
+
   async listRules(): Promise<Rule[]> {
     const data = await this.get<{ rules: Rule[] }>('/api/rules');
     return data.rules;

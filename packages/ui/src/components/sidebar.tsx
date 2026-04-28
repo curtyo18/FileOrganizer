@@ -20,6 +20,7 @@ interface SidebarProps {
   scanIsLive: boolean;
   duplicateGroupCount?: number;
   ruleCount?: number;
+  roleCount?: number;
   quarantineBytes?: number;
 }
 
@@ -51,6 +52,14 @@ export function Sidebar(props: SidebarProps) {
       icon: 'rules',
       kbd: 'g o',
       count: props.ruleCount && props.ruleCount > 0 ? String(props.ruleCount) : null,
+    },
+    {
+      id: 'roles',
+      href: '/roles',
+      label: 'Roles',
+      icon: 'drive',
+      kbd: 'g r',
+      count: props.roleCount && props.roleCount > 0 ? String(props.roleCount) : null,
     },
     {
       id: 'duplicates',
