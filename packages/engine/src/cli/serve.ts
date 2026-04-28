@@ -7,6 +7,7 @@ import { seedDefaultRoles } from '../roles/defaults.js';
 import { ThrottleManager } from '../throttle/manager.js';
 import { ThrottleScheduler } from '../throttle/scheduler.js';
 import { createServer } from '../api/server.js';
+import { reconcileOnStartup } from '../catalog/reconcile.js';
 
 export interface ServeCliOptions {
   pointerPath: string;
@@ -34,6 +35,11 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
   migrate(db);
   seedDefaultRoles(db);
   seedDefaultRules(db);
+
+  const reconciled = await reconcileOnStartup(db);
+  console.log(
+    `Reconciled ${reconciled.scanned} in-progress operations (${reconciled.ambiguous} ambiguous)`,
+  );
 
   let throttleManager = new ThrottleManager(
     new SettingsRepo(db).load().throttleProfiles,
