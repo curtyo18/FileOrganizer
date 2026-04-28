@@ -406,9 +406,22 @@ function DupDetail({
                     alignItems: 'center',
                     justifyContent: 'center',
                     color: 'var(--fg-3)',
+                    overflow: 'hidden',
                   }}
                 >
-                  <Icon name={categoryIcon(cat)} size={28} />
+                  {cat === 'image' ? (
+                    <img
+                      src={`/api/preview/${c.fileId}?max=192`}
+                      loading="lazy"
+                      alt=""
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      onError={(e) => {
+                        (e.currentTarget as HTMLImageElement).style.display = 'none';
+                      }}
+                    />
+                  ) : (
+                    <Icon name={categoryIcon(cat)} size={28} />
+                  )}
                 </div>
                 <div style={{ padding: 10 }}>
                   {isKeeper ? (

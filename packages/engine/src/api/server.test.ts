@@ -655,3 +655,165 @@ describe('plan + apply + undo endpoints', () => {
     expect(planSecondBody.operations[0]!.destDriveId).toBe(altDriveId);
   });
 });
+
+describe('preview endpoint', () => {
+  it('serves a resized JPEG for an indexed image', async () => {
+    const sharp = (await import('sharp')).default;
+    const { mkdirSync } = await import('node:fs');
+    const { DriveRepo } = await import('../drives/repo.js');
+    const { FilesRepo } = await import('../catalog/files-repo.js');
+
+    const driveRoot = join(dir, 'drive');
+    mkdirSync(driveRoot, { recursive: true });
+    const drive = new DriveRepo(db).upsert({
+      volumeSerial: 'PV',
+      label: 'PV',
+      currentLetter: null,
+      mountPath: driveRoot,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1,
+      freeBytes: 1,
+    });
+    db.prepare(
+      `INSERT OR IGNORE INTO scans (id, drive_id, started_at, status, throttle_profile)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run('scan-pv', drive.id, new Date().toISOString(), 'completed', 'balanced');
+
+    const imgPath = join(driveRoot, 'tiny.png');
+    await sharp({
+      create: { width: 16, height: 16, channels: 3, background: { r: 200, g: 50, b: 50 } },
+    })
+      .png()
+      .toFile(imgPath);
+
+    new FilesRepo(db).upsertOne({
+      driveId: drive.id,
+      path: imgPath,
+      name: 'tiny.png',
+      extension: 'png',
+      sizeBytes: 256,
+      category: 'image',
+      sha256: 'abc',
+      mtime: '2024-01-01T00:00:00.000Z',
+      ctime: '2024-01-01T00:00:00.000Z',
+      exifDate: null,
+      dateSource: 'mtime',
+      width: 16,
+      height: 16,
+      durationSeconds: null,
+      ntfsFileId: null,
+      state: 'indexed',
+      scanId: 'scan-pv',
+    });
+    const fileId = (
+      db.prepare(`SELECT id FROM files WHERE path = ?`).get(imgPath) as { id: number }
+    ).id;
+
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/preview/${fileId}?max=64`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('image/jpeg');
+    const buf = await res.arrayBuffer();
+    expect(buf.byteLength).toBeGreaterThan(0);
+  });
+
+  it('returns 404 for a non-existent file id', async () => {
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/preview/999999`);
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 400 when the file is not an image', async () => {
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    const { DriveRepo } = await import('../drives/repo.js');
+    const { FilesRepo } = await import('../catalog/files-repo.js');
+
+    const driveRoot = join(dir, 'docs-drive');
+    mkdirSync(driveRoot, { recursive: true });
+    const drive = new DriveRepo(db).upsert({
+      volumeSerial: 'DOC',
+      label: 'DOC',
+      currentLetter: null,
+      mountPath: driveRoot,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1,
+      freeBytes: 1,
+    });
+    db.prepare(
+      `INSERT OR IGNORE INTO scans (id, drive_id, started_at, status, throttle_profile)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run('scan-doc', drive.id, new Date().toISOString(), 'completed', 'balanced');
+
+    const docPath = join(driveRoot, 'a.pdf');
+    writeFileSync(docPath, 'pretend pdf');
+    new FilesRepo(db).upsertOne({
+      driveId: drive.id,
+      path: docPath,
+      name: 'a.pdf',
+      extension: 'pdf',
+      sizeBytes: 11,
+      category: 'document',
+      sha256: 'def',
+      mtime: '2024-01-01T00:00:00.000Z',
+      ctime: '2024-01-01T00:00:00.000Z',
+      exifDate: null,
+      dateSource: 'mtime',
+      width: null,
+      height: null,
+      durationSeconds: null,
+      ntfsFileId: null,
+      state: 'indexed',
+      scanId: 'scan-doc',
+    });
+    const fileId = (
+      db.prepare(`SELECT id FROM files WHERE path = ?`).get(docPath) as { id: number }
+    ).id;
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/preview/${fileId}`);
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 403 if the file path is not under any registered drive', async () => {
+    const { DriveRepo } = await import('../drives/repo.js');
+    const { FilesRepo } = await import('../catalog/files-repo.js');
+
+    const drive = new DriveRepo(db).upsert({
+      volumeSerial: 'NX',
+      label: 'NX',
+      currentLetter: null,
+      mountPath: join(dir, 'somewhere-else'),
+      kind: 'local',
+      roles: [],
+      totalBytes: 1,
+      freeBytes: 1,
+    });
+    db.prepare(
+      `INSERT OR IGNORE INTO scans (id, drive_id, started_at, status, throttle_profile)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run('scan-nx', drive.id, new Date().toISOString(), 'completed', 'balanced');
+
+    new FilesRepo(db).upsertOne({
+      driveId: drive.id,
+      path: '/etc/passwd',
+      name: 'passwd',
+      extension: '',
+      sizeBytes: 1,
+      category: 'image',
+      sha256: 'evil',
+      mtime: '2024-01-01T00:00:00.000Z',
+      ctime: '2024-01-01T00:00:00.000Z',
+      exifDate: null,
+      dateSource: 'mtime',
+      width: null,
+      height: null,
+      durationSeconds: null,
+      ntfsFileId: null,
+      state: 'indexed',
+      scanId: 'scan-nx',
+    });
+    const fileId = (
+      db.prepare(`SELECT id FROM files WHERE path = ?`).get('/etc/passwd') as { id: number }
+    ).id;
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/preview/${fileId}`);
+    expect(res.status).toBe(403);
+  });
+});

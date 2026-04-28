@@ -4,6 +4,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import sharp from 'sharp';
 import type { Catalog } from '../catalog/connection.js';
 import { DriveRepo } from '../drives/repo.js';
 import { ScansRepo } from '../catalog/scans-repo.js';
@@ -143,6 +144,38 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       )
       .all(driveId, limit, offset);
     return c.json({ files: rows });
+  });
+
+  app.get('/api/preview/:fileId', async (c) => {
+    const fileId = parseInt(c.req.param('fileId'), 10);
+    if (Number.isNaN(fileId)) return c.json({ error: 'invalid file id' }, 400);
+    const requested = parseInt(c.req.query('max') ?? '256', 10);
+    const max = Math.min(Math.max(Number.isFinite(requested) ? requested : 256, 16), 2048);
+    const row = opts.db
+      .prepare(`SELECT path, category FROM files WHERE id = ?`)
+      .get(fileId) as { path: string; category: string } | undefined;
+    if (!row) return c.json({ error: 'file not found' }, 404);
+    if (row.category !== 'image') return c.json({ error: 'not an image' }, 400);
+    const allowedRoots = drives
+      .list()
+      .map((d) => d.mountPath)
+      .filter((p): p is string => !!p);
+    if (!isPathUnderAny(row.path, allowedRoots)) {
+      return c.json({ error: 'path is not under a registered drive' }, 403);
+    }
+    if (!existsSync(row.path)) return c.json({ error: 'file missing on disk' }, 404);
+    try {
+      const buf = await sharp(row.path)
+        .rotate()
+        .resize(max, max, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 80 })
+        .toBuffer();
+      c.header('content-type', 'image/jpeg');
+      c.header('cache-control', 'max-age=300');
+      return c.body(buf);
+    } catch (err) {
+      return c.json({ error: `preview failed: ${(err as Error).message}` }, 500);
+    }
   });
 
   app.get('/api/duplicates', (c) => {
@@ -431,6 +464,17 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
  * mount paths with anything the request explicitly provided.
  * Caller-supplied values win, so a user can override a stale stored mount.
  */
+function isPathUnderAny(path: string, roots: readonly string[]): boolean {
+  for (const r of roots) {
+    const trimmed = r.replace(/[/\\]+$/, '');
+    if (!trimmed) continue;
+    if (path === trimmed) return true;
+    if (path.startsWith(trimmed + '/')) return true;
+    if (path.startsWith(trimmed + '\\')) return true;
+  }
+  return false;
+}
+
 function mergeDriveRoots(
   drives: DriveRepo,
   override: Record<string, string>,
