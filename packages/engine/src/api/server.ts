@@ -218,9 +218,12 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
         .resize(max, max, { fit: 'inside', withoutEnlargement: true })
         .jpeg({ quality: 80 })
         .toBuffer();
-      c.header('content-type', 'image/jpeg');
-      c.header('cache-control', 'max-age=300');
-      return c.body(buf);
+      return new Response(new Uint8Array(buf), {
+        headers: {
+          'content-type': 'image/jpeg',
+          'cache-control': 'max-age=300',
+        },
+      });
     } catch (err) {
       return c.json({ error: `preview failed: ${(err as Error).message}` }, 500);
     }
