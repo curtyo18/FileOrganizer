@@ -34,7 +34,6 @@ export class SettingsRepo {
     return {
       catalogVersion: 1,
       categoryMap: DEFAULT_CATEGORY_MAP,
-      roles: [],
       throttleProfiles: defaultThrottleProfiles(cpuCount),
       throttleSchedule: [],
       recentArchiveCutoffYears: 2,

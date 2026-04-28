@@ -14,7 +14,6 @@ export interface CategoryMap {
 export interface Settings {
   catalogVersion: number;
   categoryMap: CategoryMap;
-  roles: RoleDefinition[];
   throttleProfiles: Record<ThrottleProfileName, ThrottleProfile>;
   throttleSchedule: ThrottleScheduleEntry[];
   recentArchiveCutoffYears: number;
