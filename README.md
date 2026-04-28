@@ -39,7 +39,7 @@ uploaded anywhere. The catalog is a local SQLite file you own and can move.
 | M4 | Duplicates + Quarantine | ✅ done |
 | M5 | Rules engine + organize + undo | ✅ done |
 | M6 | Drive roles + throttle schedules | ✅ done |
-| M7 | Polish: reconciliation, free-space safety, NAS handling, shortcuts | 🚧 in progress |
+| M7 | Polish: reconciliation, free-space safety, NAS handling, shortcuts | ✅ done |
 
 See `docs/superpowers/plans/` for the full plan and `docs/superpowers/specs/`
 for the design spec.
