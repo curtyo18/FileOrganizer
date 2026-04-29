@@ -8,6 +8,7 @@ export interface WalkOptions {
   excluded: ReadonlySet<string>;
   extraExcluded: readonly string[];
   signal?: AbortSignal;
+  onEmptyDir?: (path: string) => void;
 }
 
 export interface WalkEntry {
@@ -22,27 +23,35 @@ export interface WalkEntry {
 export async function* walk(opts: WalkOptions): AsyncIterable<WalkEntry> {
   for (const root of opts.roots) {
     if (opts.signal?.aborted) return;
-    yield* walkOne(root, opts);
+    yield* walkOne(root, opts, true);
   }
 }
 
-async function* walkOne(dir: string, opts: WalkOptions): AsyncIterable<WalkEntry> {
-  if (opts.signal?.aborted) return;
+async function* walkOne(
+  dir: string,
+  opts: WalkOptions,
+  isRoot: boolean,
+): AsyncGenerator<WalkEntry, number, void> {
+  if (opts.signal?.aborted) return 0;
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
   } catch {
-    return;
+    // Unreadable subtree: treat as non-empty so the parent isn't classified
+    // empty just because we couldn't see this child's contents.
+    return 1;
   }
+  let yieldedCount = 0;
   for (const entry of entries) {
-    if (opts.signal?.aborted) return;
+    if (opts.signal?.aborted) return yieldedCount;
     const childName = entry.name;
     if (isPathExcluded(childName, opts.excluded, opts.extraExcluded)) {
       continue;
     }
     const childPath = join(dir, childName);
     if (entry.isDirectory()) {
-      yield* walkOne(childPath, opts);
+      const childYielded = yield* walkOne(childPath, opts, false);
+      yieldedCount += childYielded;
     } else if (entry.isFile()) {
       const ext = extname(childName).slice(1).toLowerCase();
       if (!opts.extensions.has(ext)) continue;
@@ -60,6 +69,11 @@ async function* walkOne(dir: string, opts: WalkOptions): AsyncIterable<WalkEntry
         mtime: s.mtime.toISOString(),
         ctime: s.ctime.toISOString(),
       };
+      yieldedCount += 1;
     }
   }
+  if (!isRoot && yieldedCount === 0 && !opts.signal?.aborted) {
+    opts.onEmptyDir?.(dir);
+  }
+  return yieldedCount;
 }
