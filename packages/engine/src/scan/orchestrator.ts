@@ -163,6 +163,14 @@ export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
       }
     }
 
+    // The in-loop check fires between files. If cancel arrives after the
+    // last file but before finalization, we'd otherwise finish as
+    // 'completed'. Re-check the signal one more time so that race lands
+    // as 'cancelled'.
+    if (!cancelled && opts.signal?.aborted) {
+      cancelled = true;
+    }
+
     if (!cancelled) {
       filesRepo.markMissing(opts.driveId, scan.id, opts.roots);
     }

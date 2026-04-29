@@ -55,8 +55,13 @@ describe('API server scans endpoint', () => {
     const { mkdirSync, writeFileSync } = await import('node:fs');
     const dataDir = join(dir, 'cancel-data');
     mkdirSync(dataDir, { recursive: true });
-    for (let i = 0; i < 800; i += 1) {
-      writeFileSync(join(dataDir, `f${String(i).padStart(4, '0')}.jpg`), `payload-${i}`.repeat(80));
+    // Files need to be big enough that hashFile actually iterates multiple
+    // chunks (the idle profile only sleeps *between* chunks). 100 files at
+    // ~600 KB each gives ~3 chunks/file × 5 ms = 1.5 s of sleep total, more
+    // than enough cancel-window even on fast CI runners.
+    const payload = Buffer.alloc(600 * 1024, 'x');
+    for (let i = 0; i < 100; i += 1) {
+      writeFileSync(join(dataDir, `f${String(i).padStart(4, '0')}.jpg`), payload);
     }
     const post = await fetch(`http://127.0.0.1:${handle.port}/api/scans`, {
       method: 'POST',
@@ -65,13 +70,12 @@ describe('API server scans endpoint', () => {
     });
     expect(post.status).toBe(201);
     const { scan } = (await post.json()) as { scan: { id: string } };
-    await new Promise((r) => setTimeout(r, 50));
     const cancel = await fetch(
       `http://127.0.0.1:${handle.port}/api/scans/${scan.id}/cancel`,
       { method: 'POST' },
     );
     expect(cancel.status).toBe(200);
-    for (let i = 0; i < 50; i += 1) {
+    for (let i = 0; i < 100; i += 1) {
       const got = await fetch(`http://127.0.0.1:${handle.port}/api/scans/${scan.id}`);
       const body = (await got.json()) as { scan: { status: string } };
       if (body.scan.status === 'cancelled') return;
