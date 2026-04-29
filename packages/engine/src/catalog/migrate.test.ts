@@ -34,10 +34,37 @@ describe('migrate', () => {
     const names = tables.map((t) => t.name);
     for (const t of [
       'drives', 'scans', 'files', 'rules', 'batches', 'operations',
-      'quarantine', 'settings', 'schema_version',
+      'quarantine', 'settings', 'schema_version', 'empty_dirs',
     ]) {
       expect(names).toContain(t);
     }
+    const indexes = db
+      .prepare(`SELECT name FROM sqlite_master WHERE type='index' ORDER BY name`)
+      .all() as { name: string }[];
+    expect(indexes.map((i) => i.name)).toContain('idx_empty_dirs_drive');
+    closeCatalog(db);
+  });
+
+  it('empty_dirs table accepts inserts and round-trips a row', () => {
+    const db = openCatalog(join(freshDir(), 'catalog.db'));
+    migrate(db);
+    db.prepare(
+      `INSERT INTO drives (id, volume_serial, label, current_letter, kind, last_seen_at)
+       VALUES ('d1', 'S1', 'D1', 'D', 'local', '2026-01-01T00:00:00Z')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO scans (id, drive_id, started_at, status, throttle_profile)
+       VALUES ('s1', 'd1', '2026-01-01T00:00:00Z', 'completed', 'balanced')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO empty_dirs (drive_id, path, last_seen_scan_id, found_at)
+       VALUES ('d1', '/x/empty', 's1', '2026-01-01T00:00:00Z')`,
+    ).run();
+    const row = db
+      .prepare(`SELECT path, last_seen_scan_id AS scanId FROM empty_dirs WHERE drive_id = 'd1'`)
+      .get() as { path: string; scanId: string };
+    expect(row.path).toBe('/x/empty');
+    expect(row.scanId).toBe('s1');
     closeCatalog(db);
   });
 
