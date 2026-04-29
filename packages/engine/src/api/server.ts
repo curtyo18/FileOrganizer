@@ -195,6 +195,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     if (!existsSync(abs)) return c.json({ error: 'path not found' }, 404);
     let dirents;
     try {
+      // eslint-disable-next-line no-restricted-syntax -- TODO #11: per-call readdir for the folder picker; bounded to one directory's children, but should still move to async fs.promises.readdir.
       dirents = readdirSync(abs, { withFileTypes: true });
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400);

@@ -75,6 +75,7 @@ export function evictIfTooBig(catalogDir: string, maxBytes = MAX_CACHE_BYTES): v
   let total = 0;
   let prefixDirs: string[] = [];
   try {
+    // eslint-disable-next-line no-restricted-syntax -- TODO #11: LRU eviction walks the cache tree synchronously; should use async fs.promises.readdir.
     prefixDirs = readdirSync(root, { withFileTypes: true })
       .filter((d) => d.isDirectory())
       .map((d) => join(root, d.name));
@@ -84,6 +85,7 @@ export function evictIfTooBig(catalogDir: string, maxBytes = MAX_CACHE_BYTES): v
   for (const dir of prefixDirs) {
     let files;
     try {
+      // eslint-disable-next-line no-restricted-syntax -- TODO #11: same LRU eviction walk; should use async fs.promises.readdir.
       files = readdirSync(dir, { withFileTypes: true });
     } catch {
       continue;

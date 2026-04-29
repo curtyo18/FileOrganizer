@@ -94,7 +94,6 @@ export function Duplicates(_props: DuplicatesProps) {
   useEffect(() => {
     initialLoadRef.current = true;
     loadPage(0, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [minSize]);
 
   const driveById = new Map(drives.map((d) => [d.id, d]));

@@ -4,7 +4,6 @@ import type { DriveRecord, Rule } from '@fileorganizer/shared';
 import {
   defaultApiClient,
   type OrganizePlanResponse,
-  type PlannedOperationUI,
   type RuleStatUI,
 } from '../api/client.js';
 import { Icon } from '../components/icon.js';

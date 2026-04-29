@@ -44,6 +44,7 @@ export function findEmptyDirs(
     }
     let entries;
     try {
+      // eslint-disable-next-line no-restricted-syntax -- TODO #11: this is the recursive walker that blocks the event loop; #11's proper fix moves empty-dir detection into the scan walker (no separate walk needed).
       entries = readdirSync(dir, { withFileTypes: true });
     } catch {
       return false;
@@ -149,6 +150,7 @@ export function removeEmptyDirs(
     }
     let entries;
     try {
+      // eslint-disable-next-line no-restricted-syntax -- TODO #11: per-path readdir before rmdir; bounded but should still move to async fs.promises.readdir.
       entries = readdirSync(abs);
     } catch (err) {
       const reason = (err as NodeJS.ErrnoException).code ?? (err as Error).message;

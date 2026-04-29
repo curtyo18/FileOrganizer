@@ -191,6 +191,7 @@ function sweepEmptySourceDirs(
   let removed = 0;
   for (const d of ordered) {
     try {
+      // eslint-disable-next-line no-restricted-syntax -- TODO #11: per-path readdir inside the post-apply sweep; bounded but should move to async fs.promises.readdir.
       if (readdirSync(d).length === 0) {
         rmdirSync(d);
         removed += 1;

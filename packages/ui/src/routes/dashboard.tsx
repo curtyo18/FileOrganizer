@@ -112,14 +112,6 @@ function DriveRow({ d }: { d: DriveRecord }) {
   );
 }
 
-interface ActivityRow {
-  scanId: string;
-  startedAt: string;
-  status: string;
-  filesIndexed: number;
-  driveLabel: string;
-}
-
 function ActivityFeed({ scans, drives }: { scans: ScanRecord[]; drives: DriveRecord[] }) {
   const recent = scans.slice(0, 12);
   const driveById = new Map(drives.map((d) => [d.id, d]));

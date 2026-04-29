@@ -39,7 +39,6 @@ export function Cleanup(_props: CleanupProps) {
         }
       })
       .catch((e) => setError((e as Error).message));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const scanDrive = async (driveId: string) => {

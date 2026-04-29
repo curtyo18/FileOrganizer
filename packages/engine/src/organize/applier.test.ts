@@ -37,11 +37,6 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-interface SetupResult {
-  driveId: string;
-  ruleId: string;
-}
-
 function seedDrive(label: string): string {
   return new DriveRepo(db).upsert({
     volumeSerial: `serial-${label}`,

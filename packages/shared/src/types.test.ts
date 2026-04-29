@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { Category, DriveKind, ScanStatus, FileState, BatchKind, OperationKind, OperationStatus } from './types.js';
+import type { Category } from './types.js';
 import { CATEGORIES, DRIVE_KINDS } from './types.js';
 
 describe('domain enums', () => {

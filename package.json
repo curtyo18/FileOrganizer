@@ -14,7 +14,7 @@
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "test": "npm run build --workspace=@fileorganizer/shared && npm run test --workspaces --if-present",
-    "lint": "npm run lint --workspaces --if-present",
+    "lint": "eslint \"packages/*/src/**/*.{ts,tsx}\"",
     "typecheck": "npm run build --workspace=@fileorganizer/shared && npm run typecheck --workspaces --if-present",
     "start": "npm run build --workspace=@fileorganizer/shared && npm run build --workspace=@fileorganizer/ui && npm run start --workspace=@fileorganizer/engine",
     "fetch-binaries": "tsx scripts/fetch-binaries.ts"
