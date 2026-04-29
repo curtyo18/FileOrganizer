@@ -326,6 +326,19 @@ export class ApiClient {
     return data.scan;
   }
 
+  async cancelScan(scanId: string): Promise<unknown> {
+    const res = await fetch(
+      `${this.opts.baseUrl}/api/scans/${encodeURIComponent(scanId)}/cancel`,
+      { method: 'POST' },
+    );
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`cancelScan: ${res.status} ${body}`);
+    }
+    const data = (await res.json()) as { scan: unknown };
+    return data.scan;
+  }
+
   protected get baseUrl(): string {
     return this.opts.baseUrl;
   }

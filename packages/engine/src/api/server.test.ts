@@ -51,6 +51,42 @@ describe('API server scans endpoint', () => {
     throw new Error('scan did not complete in time');
   });
 
+  it('cancels a running scan via POST /api/scans/:id/cancel', async () => {
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    const dataDir = join(dir, 'cancel-data');
+    mkdirSync(dataDir, { recursive: true });
+    for (let i = 0; i < 800; i += 1) {
+      writeFileSync(join(dataDir, `f${String(i).padStart(4, '0')}.jpg`), `payload-${i}`.repeat(80));
+    }
+    const post = await fetch(`http://127.0.0.1:${handle.port}/api/scans`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rootPath: dataDir, profile: 'idle' }),
+    });
+    expect(post.status).toBe(201);
+    const { scan } = (await post.json()) as { scan: { id: string } };
+    await new Promise((r) => setTimeout(r, 50));
+    const cancel = await fetch(
+      `http://127.0.0.1:${handle.port}/api/scans/${scan.id}/cancel`,
+      { method: 'POST' },
+    );
+    expect(cancel.status).toBe(200);
+    for (let i = 0; i < 50; i += 1) {
+      const got = await fetch(`http://127.0.0.1:${handle.port}/api/scans/${scan.id}`);
+      const body = (await got.json()) as { scan: { status: string } };
+      if (body.scan.status === 'cancelled') return;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    throw new Error('scan never reached cancelled status');
+  });
+
+  it('returns 404 cancelling an unknown scan id', async () => {
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/scans/no-such/cancel`, {
+      method: 'POST',
+    });
+    expect(res.status).toBe(404);
+  });
+
   it('starts a scan via POST /api/scans and reaches completion', async () => {
     const { mkdirSync, writeFileSync } = await import('node:fs');
     const dataDir = join(dir, 'data');

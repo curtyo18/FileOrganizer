@@ -75,6 +75,16 @@ export function Scans(_props: RoutableProps) {
   const activeScans = scans.filter((s) => s.status === 'running' || s.status === 'paused');
   const completedScans = scans.filter((s) => s.status !== 'running' && s.status !== 'paused');
 
+  const onCancel = async (scanId: string) => {
+    if (!window.confirm('Cancel scan?')) return;
+    try {
+      await api.cancelScan(scanId);
+      reload();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
   return (
     <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14, height: '100%', overflowY: 'auto' }}>
       <div class="card">
@@ -145,6 +155,14 @@ export function Scans(_props: RoutableProps) {
                         {s.rootPaths.join(', ')}
                       </span>
                     ) : null}
+                    <div style={{ flex: 1 }} />
+                    <button
+                      class="btn ghost sm"
+                      onClick={() => onCancel(s.id)}
+                      title="Cancel scan"
+                    >
+                      Stop
+                    </button>
                   </div>
                   <div style={{ display: 'flex', gap: 18, fontSize: 11, color: 'var(--fg-2)' }}>
                     <span>
@@ -220,7 +238,13 @@ export function Scans(_props: RoutableProps) {
               {completedScans.map((s) => {
                 const drive = driveById.get(s.driveId);
                 const statusClass =
-                  s.status === 'completed' ? 'ok' : s.status === 'failed' ? 'danger' : '';
+                  s.status === 'completed'
+                    ? 'ok'
+                    : s.status === 'failed'
+                      ? 'danger'
+                      : s.status === 'cancelled'
+                        ? 'warn'
+                        : '';
                 return (
                   <tr key={s.id}>
                     <td class="mono" style={{ color: 'var(--fg-2)' }}>

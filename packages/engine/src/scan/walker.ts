@@ -7,6 +7,7 @@ export interface WalkOptions {
   extensions: ReadonlySet<string>;
   excluded: ReadonlySet<string>;
   extraExcluded: readonly string[];
+  signal?: AbortSignal;
 }
 
 export interface WalkEntry {
@@ -20,11 +21,13 @@ export interface WalkEntry {
 
 export async function* walk(opts: WalkOptions): AsyncIterable<WalkEntry> {
   for (const root of opts.roots) {
+    if (opts.signal?.aborted) return;
     yield* walkOne(root, opts);
   }
 }
 
 async function* walkOne(dir: string, opts: WalkOptions): AsyncIterable<WalkEntry> {
+  if (opts.signal?.aborted) return;
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
@@ -32,6 +35,7 @@ async function* walkOne(dir: string, opts: WalkOptions): AsyncIterable<WalkEntry
     return;
   }
   for (const entry of entries) {
+    if (opts.signal?.aborted) return;
     const childName = entry.name;
     if (isPathExcluded(childName, opts.excluded, opts.extraExcluded)) {
       continue;

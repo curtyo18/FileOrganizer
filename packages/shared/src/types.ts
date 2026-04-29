@@ -15,7 +15,7 @@ export type Category = (typeof CATEGORIES)[number];
 export const DRIVE_KINDS = ['local', 'external', 'network'] as const;
 export type DriveKind = (typeof DRIVE_KINDS)[number];
 
-export type ScanStatus = 'running' | 'paused' | 'completed' | 'failed';
+export type ScanStatus = 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
 
 export type FileState =
   | 'indexed'

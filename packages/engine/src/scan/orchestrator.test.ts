@@ -101,6 +101,33 @@ describe('runScan', () => {
     expect(files.findByPath(driveId, a)?.state).toBe('missing');
   });
 
+  it('finalizes the scan as cancelled when the abort signal fires mid-walk', async () => {
+    for (let i = 0; i < 1000; i += 1) {
+      fixture(`f${String(i).padStart(4, '0')}.jpg`, `payload-${i}`.repeat(50));
+    }
+    const writes: string[] = [];
+    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
+    const controller = new AbortController();
+    const promise = runScan({
+      db,
+      driveId,
+      roots: [scanRoot],
+      categoryMap: DEFAULT_CATEGORY_MAP,
+      throttle,
+      log,
+      mediainfoPath: '/no/such',
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 50);
+    const result = await promise;
+    expect(result.cancelled).toBe(true);
+    expect(result.filesIndexed).toBeGreaterThan(0);
+    expect(result.filesIndexed).toBeLessThan(1000);
+    const scan = new ScansRepo(db).findById(result.scanId);
+    expect(scan!.status).toBe('cancelled');
+  });
+
   it('persists a scans row with completed status', async () => {
     fixture('a.jpg', 'aaa');
     const writes: string[] = [];

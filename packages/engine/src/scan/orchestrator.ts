@@ -23,6 +23,8 @@ export interface RunScanOptions {
   log: Logger;
   mediainfoPath: string;
   extraExcluded?: readonly string[];
+  signal?: AbortSignal;
+  onStart?: (scanId: string) => void;
 }
 
 export interface RunScanResult {
@@ -32,6 +34,7 @@ export interface RunScanResult {
   filesUnchanged: number;
   filesSkipped: number;
   errors: number;
+  cancelled: boolean;
 }
 
 export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
@@ -42,6 +45,7 @@ export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
     rootPaths: opts.roots,
     throttleProfile: opts.throttle.current().name,
   });
+  opts.onStart?.(scan.id);
   const log = opts.log.child({ scanId: scan.id });
   log.info('scan-started', { roots: opts.roots });
 
@@ -58,13 +62,16 @@ export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
   const PROGRESS_FILE_CADENCE = 50;
   let filesSinceProgress = 0;
 
+  let cancelled = false;
   try {
-    const walker = walk({
+    const walkOpts: import('./walker.js').WalkOptions = {
       roots: opts.roots,
       extensions: allowedExtensions,
       excluded: DEFAULT_EXCLUDED_NAMES,
       extraExcluded: opts.extraExcluded ?? [],
-    });
+    };
+    if (opts.signal) walkOpts.signal = opts.signal;
+    const walker = walk(walkOpts);
 
     const flushProgress = () => {
       scansRepo.updateProgress(scan.id, {
@@ -79,6 +86,10 @@ export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
     };
 
     for await (const entry of walker) {
+      if (opts.signal?.aborted) {
+        cancelled = true;
+        break;
+      }
       filesSeen += 1;
       filesSinceProgress += 1;
       const dirPart = entry.path.slice(0, entry.path.length - entry.name.length);
@@ -152,7 +163,9 @@ export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
       }
     }
 
-    filesRepo.markMissing(opts.driveId, scan.id, opts.roots);
+    if (!cancelled) {
+      filesRepo.markMissing(opts.driveId, scan.id, opts.roots);
+    }
     scansRepo.updateProgress(scan.id, {
       lastCompletedDirectory: lastDir,
       filesSeen,
@@ -160,15 +173,28 @@ export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
       filesSkipped,
       bytesProcessed,
     });
-    scansRepo.finish(scan.id, 'completed', { errors });
-    log.info('scan-completed', { filesIndexed, filesUnchanged, filesSkipped, errors });
+    if (cancelled) {
+      scansRepo.finish(scan.id, 'cancelled', { errors });
+      log.info('scan-cancelled', { filesIndexed, filesUnchanged, filesSkipped, errors });
+    } else {
+      scansRepo.finish(scan.id, 'completed', { errors });
+      log.info('scan-completed', { filesIndexed, filesUnchanged, filesSkipped, errors });
+    }
   } catch (err) {
     scansRepo.finish(scan.id, 'failed', { errors });
     log.error('scan-failed', { err: (err as Error).message });
     throw err;
   }
 
-  return { scanId: scan.id, filesSeen, filesIndexed, filesUnchanged, filesSkipped, errors };
+  return {
+    scanId: scan.id,
+    filesSeen,
+    filesIndexed,
+    filesUnchanged,
+    filesSkipped,
+    errors,
+    cancelled,
+  };
 }
 
 function collectAllowedExtensions(map: CategoryMap): ReadonlySet<string> {

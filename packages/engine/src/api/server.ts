@@ -46,6 +46,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   const events = new EventBus();
   const drives = new DriveRepo(opts.db);
   const scans = new ScansRepo(opts.db);
+  const activeScans = new Map<string, AbortController>();
 
   app.get('/healthz', (c) => c.json({ ok: true }));
   app.get('/api/drives', (c) => c.json({ drives: drives.list() }));
@@ -99,6 +100,8 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     );
     const log = createLogger({ level: 'info', write: defaultWriter });
     const mediainfoPath = body.mediainfoPath ?? '';
+    const controller = new AbortController();
+    let registeredId: string | null = null;
     const promise = runScan({
       db: opts.db,
       driveId: drive.id,
@@ -107,6 +110,11 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       throttle,
       log,
       mediainfoPath,
+      signal: controller.signal,
+      onStart: (scanId) => {
+        registeredId = scanId;
+        activeScans.set(scanId, controller);
+      },
     });
     promise
       .then((r) => {
@@ -119,7 +127,10 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
           bytesProcessed: 0,
         });
       })
-      .catch((err) => log.error('background-scan-failed', { err: (err as Error).message }));
+      .catch((err) => log.error('background-scan-failed', { err: (err as Error).message }))
+      .finally(() => {
+        if (registeredId) activeScans.delete(registeredId);
+      });
     await new Promise((r) => setTimeout(r, 50));
     const recentRow = opts.db
       .prepare(`SELECT id FROM scans WHERE drive_id = ? ORDER BY started_at DESC LIMIT 1`)
@@ -132,6 +143,15 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     const driveId = c.req.query('driveId');
     const list = driveId ? scans.list({ driveId }) : scans.list();
     return c.json({ scans: list });
+  });
+
+  app.post('/api/scans/:id/cancel', (c) => {
+    const id = c.req.param('id');
+    const ctrl = activeScans.get(id);
+    if (!ctrl) return c.json({ error: 'no active scan with that id' }, 404);
+    ctrl.abort();
+    const scan = scans.findById(id);
+    return c.json({ scan });
   });
 
   app.get('/api/files', (c) => {
