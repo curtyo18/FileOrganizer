@@ -43,6 +43,7 @@ export interface OrganizePlan {
   unresolvedRoles: UnresolvedRole[];
   ruleStats: RuleStat[];
   total: number;
+  totalBytes: number;
   hasMore: boolean;
 }
 
@@ -159,6 +160,9 @@ export function planOrganize(input: PlanInput): OrganizePlan {
   });
 
   const total = operations.length;
+  const totalBytes = operations
+    .filter((o) => o.kind !== 'noop')
+    .reduce((s, o) => s + o.estimatedBytes, 0);
   const paginated = input.limit != null || input.offset != null;
   const offset = Math.max(input.offset ?? 0, 0);
   const limit = paginated ? Math.max(input.limit ?? total, 0) : total;
@@ -171,6 +175,7 @@ export function planOrganize(input: PlanInput): OrganizePlan {
     unresolvedRoles: [...unresolvedByRule.values()],
     ruleStats,
     total,
+    totalBytes,
     hasMore,
   };
 }

@@ -775,6 +775,291 @@ describe('plan + apply + undo endpoints', () => {
     expect(planSecondBody.operations.length).toBeGreaterThan(0);
     expect(planSecondBody.operations[0]!.destDriveId).toBe(altDriveId);
   });
+
+  it('apply-all dry-runs the full plan with no filters', async () => {
+    const { mkdirSync, writeFileSync, readFileSync, existsSync } = await import('node:fs');
+    const dataDir = join(dir, 'apply-all-basic');
+    mkdirSync(dataDir, { recursive: true });
+    for (let i = 0; i < 5; i += 1) {
+      writeFileSync(join(dataDir, `f${i}.jpg`), `image-${i}`);
+    }
+    const scanRes = await fetch(`http://127.0.0.1:${handle.port}/api/scans`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rootPath: dataDir, profile: 'idle' }),
+    });
+    expect(scanRes.status).toBe(201);
+    const { scan } = (await scanRes.json()) as { scan: { id: string; driveId: string } };
+    const driveId = scan.driveId;
+    for (let i = 0; i < 50; i += 1) {
+      const got = await fetch(`http://127.0.0.1:${handle.port}/api/scans/${scan.id}`);
+      const body = (await got.json()) as { scan: { status: string } };
+      if (body.scan.status === 'completed') break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    await fetch(`http://127.0.0.1:${handle.port}/api/rules`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'photos',
+        priority: 100,
+        match: { category: ['image'] },
+        destinationRole: 'photos',
+        destinationTemplate: 'Photos/{filename}',
+        movePolicy: 'always-review',
+        quarantinePolicy: 'default',
+      }),
+    });
+    await fetch(`http://127.0.0.1:${handle.port}/api/roles`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'photos',
+        drivePriority: [driveId],
+        fillThresholdPercent: 99,
+      }),
+    });
+
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/organize/apply-all`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        description: 'apply all dry',
+        driveRoots: { [driveId]: dataDir },
+        dryRun: true,
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      batchId: string | null;
+      completed: number;
+      failed: number;
+    };
+    expect(body.completed).toBe(5);
+    expect(body.failed).toBe(0);
+    expect(body.batchId).toBeTruthy();
+
+    for (let i = 0; i < 5; i += 1) {
+      const original = join(dataDir, `f${i}.jpg`);
+      expect(existsSync(original)).toBe(true);
+      expect(readFileSync(original, 'utf8')).toBe(`image-${i}`);
+      expect(existsSync(join(dataDir, 'Photos', `f${i}.jpg`))).toBe(false);
+    }
+  });
+
+  it('apply-all honors ruleIds whitelist', async () => {
+    const { mkdirSync, writeFileSync, existsSync } = await import('node:fs');
+    const dataDir = join(dir, 'apply-all-rules');
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, 'a.jpg'), 'jpg-a');
+    writeFileSync(join(dataDir, 'b.jpg'), 'jpg-b');
+    writeFileSync(join(dataDir, 'c.mp4'), 'mp4-c');
+    writeFileSync(join(dataDir, 'd.mp4'), 'mp4-d');
+
+    const scanRes = await fetch(`http://127.0.0.1:${handle.port}/api/scans`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rootPath: dataDir, profile: 'idle' }),
+    });
+    expect(scanRes.status).toBe(201);
+    const { scan } = (await scanRes.json()) as { scan: { id: string; driveId: string } };
+    const driveId = scan.driveId;
+    for (let i = 0; i < 50; i += 1) {
+      const got = await fetch(`http://127.0.0.1:${handle.port}/api/scans/${scan.id}`);
+      const body = (await got.json()) as { scan: { status: string } };
+      if (body.scan.status === 'completed') break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    const photoRuleRes = await fetch(`http://127.0.0.1:${handle.port}/api/rules`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'photos',
+        priority: 100,
+        match: { category: ['image'] },
+        destinationRole: 'photos',
+        destinationTemplate: 'Photos/{filename}',
+        movePolicy: 'always-review',
+        quarantinePolicy: 'default',
+      }),
+    });
+    const photoRule = (await photoRuleRes.json()) as { rule: { id: string } };
+    await fetch(`http://127.0.0.1:${handle.port}/api/rules`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'videos',
+        priority: 90,
+        match: { category: ['video'] },
+        destinationRole: 'videos',
+        destinationTemplate: 'Videos/{filename}',
+        movePolicy: 'always-review',
+        quarantinePolicy: 'default',
+      }),
+    });
+    await fetch(`http://127.0.0.1:${handle.port}/api/roles`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'photos',
+        drivePriority: [driveId],
+        fillThresholdPercent: 99,
+      }),
+    });
+    await fetch(`http://127.0.0.1:${handle.port}/api/roles`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'videos',
+        drivePriority: [driveId],
+        fillThresholdPercent: 99,
+      }),
+    });
+
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/organize/apply-all`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        description: 'apply photos only',
+        driveRoots: { [driveId]: dataDir },
+        ruleIds: [photoRule.rule.id],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { completed: number; failed: number };
+    expect(body.completed).toBe(2);
+    expect(body.failed).toBe(0);
+
+    expect(existsSync(join(dataDir, 'Photos', 'a.jpg'))).toBe(true);
+    expect(existsSync(join(dataDir, 'Photos', 'b.jpg'))).toBe(true);
+    expect(existsSync(join(dataDir, 'Videos', 'c.mp4'))).toBe(false);
+    expect(existsSync(join(dataDir, 'Videos', 'd.mp4'))).toBe(false);
+    expect(existsSync(join(dataDir, 'c.mp4'))).toBe(true);
+    expect(existsSync(join(dataDir, 'd.mp4'))).toBe(true);
+  });
+
+  it('apply-all skips cross-drive ops when kinds=[same-drive-move]', async () => {
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    const sourceRoot = join(dir, 'kind-src');
+    const altRoot = join(dir, 'kind-alt');
+    mkdirSync(sourceRoot, { recursive: true });
+    mkdirSync(altRoot, { recursive: true });
+    writeFileSync(join(sourceRoot, 'same.jpg'), 'same-payload');
+    writeFileSync(join(sourceRoot, 'cross.mp4'), 'cross-payload');
+
+    const scanRes = await fetch(`http://127.0.0.1:${handle.port}/api/scans`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rootPath: sourceRoot, profile: 'idle' }),
+    });
+    expect(scanRes.status).toBe(201);
+    const { scan } = (await scanRes.json()) as { scan: { id: string; driveId: string } };
+    const sourceDriveId = scan.driveId;
+    for (let i = 0; i < 50; i += 1) {
+      const got = await fetch(`http://127.0.0.1:${handle.port}/api/scans/${scan.id}`);
+      const body = (await got.json()) as { scan: { status: string } };
+      if (body.scan.status === 'completed') break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    const { DriveRepo } = await import('../drives/repo.js');
+    const altDrive = new DriveRepo(db).upsert({
+      volumeSerial: 'KIND-ALT',
+      label: 'KIND-ALT',
+      currentLetter: null,
+      mountPath: altRoot,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1_000_000_000,
+      freeBytes: 900_000_000,
+    });
+
+    await fetch(`http://127.0.0.1:${handle.port}/api/rules`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'photos',
+        priority: 100,
+        match: { category: ['image'] },
+        destinationRole: 'photos',
+        destinationTemplate: 'Photos/{filename}',
+        movePolicy: 'always-review',
+        quarantinePolicy: 'default',
+      }),
+    });
+    await fetch(`http://127.0.0.1:${handle.port}/api/rules`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'videos',
+        priority: 90,
+        match: { category: ['video'] },
+        destinationRole: 'videos',
+        destinationTemplate: 'Videos/{filename}',
+        movePolicy: 'always-review',
+        quarantinePolicy: 'default',
+      }),
+    });
+    await fetch(`http://127.0.0.1:${handle.port}/api/roles`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'photos',
+        drivePriority: [sourceDriveId],
+        fillThresholdPercent: 99,
+      }),
+    });
+    await fetch(`http://127.0.0.1:${handle.port}/api/roles`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'videos',
+        drivePriority: [altDrive.id],
+        fillThresholdPercent: 99,
+      }),
+    });
+
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/organize/apply-all`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        description: 'same-drive only',
+        driveRoots: { [sourceDriveId]: sourceRoot, [altDrive.id]: altRoot },
+        dryRun: true,
+        kinds: ['same-drive-move'],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      batchId: string | null;
+      completed: number;
+      failed: number;
+    };
+    expect(body.completed).toBe(1);
+    expect(body.failed).toBe(0);
+    expect(body.batchId).toBeTruthy();
+  });
+
+  it('apply-all returns a no-op result when the plan is empty', async () => {
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/organize/apply-all`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ description: 'empty', driveRoots: {} }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      batchId: string | null;
+      completed: number;
+      failed: number;
+      emptyDirsRemoved: number;
+    };
+    expect(body.batchId).toBeNull();
+    expect(body.completed).toBe(0);
+    expect(body.failed).toBe(0);
+    expect(body.emptyDirsRemoved).toBe(0);
+  });
 });
 
 describe('fs/list endpoint', () => {

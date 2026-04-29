@@ -515,6 +515,52 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     }
   });
 
+  app.post('/api/organize/apply-all', async (c) => {
+    const body = (await c.req.json()) as {
+      description: string;
+      driveRoots?: Record<string, string>;
+      dryRun?: boolean;
+      removeEmptySourceDirs?: boolean;
+      ruleIds?: string[];
+      kinds?: ('same-drive-move' | 'cross-drive-move')[];
+    };
+    const driveRoots = mergeDriveRoots(drives, body.driveRoots ?? {});
+    const plan = planOrganize({ db: opts.db, driveRoots });
+    const ruleFilter = Array.isArray(body.ruleIds) ? new Set(body.ruleIds) : null;
+    const kindFilter = Array.isArray(body.kinds) ? new Set(body.kinds) : null;
+    const operations = plan.operations.filter((op) => {
+      if (op.kind === 'noop') return false;
+      if (ruleFilter && !ruleFilter.has(op.ruleId)) return false;
+      if (kindFilter && !kindFilter.has(op.kind)) return false;
+      return true;
+    });
+    if (operations.length === 0) {
+      return c.json({ batchId: null, completed: 0, failed: 0, emptyDirsRemoved: 0 });
+    }
+    try {
+      const result = await applyApprovedBatch({
+        db: opts.db,
+        description: body.description,
+        operations,
+        driveRoots,
+        chunkBytes: 1024 * 1024,
+        dryRun: body.dryRun === true,
+        removeEmptySourceDirs: body.removeEmptySourceDirs === true,
+      });
+      events.publish({
+        type: 'batch-status',
+        batchId: result.batchId,
+        status: result.failed === 0 ? 'completed' : 'failed',
+      });
+      return c.json(result);
+    } catch (err) {
+      if (err instanceof DriveError) {
+        return c.json({ error: err.message, code: err.code }, 503);
+      }
+      throw err;
+    }
+  });
+
   app.post('/api/organize/undo/:batchId', async (c) => {
     const batchId = c.req.param('batchId');
     const body = (await c.req.json().catch(() => ({}))) as {

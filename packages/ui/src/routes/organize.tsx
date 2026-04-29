@@ -148,7 +148,47 @@ export function Organize(_props: RoutableProps) {
         `${verb} ${result.completed}/${ops.length}` +
           (result.failed > 0 ? ` · ${result.failed} failed` : '') +
           sweepNote +
-          ` · batch ${result.batchId.slice(0, 8)}`,
+          (result.batchId ? ` · batch ${result.batchId.slice(0, 8)}` : ''),
+      );
+      if (kind === 'apply') {
+        setPlan(null);
+        setSelected(new Set());
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onApplyAllClicked = async (kind: 'apply' | 'dryrun') => {
+    if (!plan || plan.total === 0 || busy) return;
+    if (
+      kind === 'apply' &&
+      (plan.total > 1000 || plan.totalBytes > 1_000_000_000) &&
+      !confirm(`Apply all ${plan.total} operations (${formatBytes(plan.totalBytes)})?`)
+    ) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api.applyAllOrganize({
+        description: 'apply all',
+        driveRoots: planRoots,
+        dryRun: kind === 'dryrun',
+        removeEmptySourceDirs: kind === 'apply' && removeEmptySourceDirs,
+      });
+      const verb = kind === 'dryrun' ? 'previewed' : 'applied';
+      const sweepNote =
+        kind === 'apply' && result.emptyDirsRemoved > 0
+          ? ` · removed ${result.emptyDirsRemoved} empty folder${result.emptyDirsRemoved === 1 ? '' : 's'}`
+          : '';
+      setInfo(
+        `${verb} ${result.completed}/${plan.total}` +
+          (result.failed > 0 ? ` · ${result.failed} failed` : '') +
+          sweepNote +
+          (result.batchId ? ` · batch ${result.batchId.slice(0, 8)}` : ''),
       );
       if (kind === 'apply') {
         setPlan(null);
@@ -230,6 +270,8 @@ export function Organize(_props: RoutableProps) {
           onPlan={onPlanClicked}
           onApply={() => onApplyClicked('apply')}
           onDryRun={() => onApplyClicked('dryrun')}
+          onApplyAll={() => onApplyAllClicked('apply')}
+          onDryRunAll={() => onApplyAllClicked('dryrun')}
           busy={busy}
           removeEmptySourceDirs={removeEmptySourceDirs}
           setRemoveEmptySourceDirs={setRemoveEmptySourceDirs}
@@ -367,6 +409,8 @@ interface PlanPanelProps {
   onPlan: () => void;
   onApply: () => void;
   onDryRun: () => void;
+  onApplyAll: () => void;
+  onDryRunAll: () => void;
   busy: boolean;
   removeEmptySourceDirs: boolean;
   setRemoveEmptySourceDirs: (v: boolean) => void;
@@ -384,6 +428,8 @@ function PlanPanel({
   onPlan,
   onApply,
   onDryRun,
+  onApplyAll,
+  onDryRunAll,
   busy,
   removeEmptySourceDirs,
   setRemoveEmptySourceDirs,
@@ -480,6 +526,22 @@ function PlanPanel({
             disabled={busy || selected.size === 0}
           >
             Apply ({selected.size}) · {formatBytes(totalSelectedBytes)}
+          </button>
+          <button
+            class="btn ghost sm"
+            onClick={onDryRunAll}
+            disabled={busy || plan.total === 0}
+            title="Dry-run every operation in the plan, across all pages"
+          >
+            Dry-run all ({plan.total})
+          </button>
+          <button
+            class="btn primary sm"
+            onClick={onApplyAll}
+            disabled={busy || plan.total === 0}
+            title="Apply every operation in the plan, across all pages"
+          >
+            Apply all ({plan.total} · {formatBytes(plan.totalBytes)})
           </button>
         </div>
       </div>

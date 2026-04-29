@@ -30,11 +30,12 @@ export interface OrganizePlanResponse {
   unresolvedRoles: { ruleId: string; reason: string; fileCount: number }[];
   ruleStats: RuleStatUI[];
   total: number;
+  totalBytes: number;
   hasMore: boolean;
 }
 
 export interface ApplyResultUI {
-  batchId: string;
+  batchId: string | null;
   completed: number;
   failed: number;
   emptyDirsRemoved: number;
@@ -291,6 +292,23 @@ export class ApiClient {
       body: JSON.stringify(input),
     });
     if (!res.ok) throw new Error(`organizeApply: ${res.status}`);
+    return (await res.json()) as ApplyResultUI;
+  }
+
+  async applyAllOrganize(input: {
+    description: string;
+    driveRoots: Record<string, string>;
+    dryRun?: boolean;
+    removeEmptySourceDirs?: boolean;
+    ruleIds?: string[];
+    kinds?: ('same-drive-move' | 'cross-drive-move')[];
+  }): Promise<ApplyResultUI> {
+    const res = await fetch(`${this.opts.baseUrl}/api/organize/apply-all`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) throw new Error(`applyAllOrganize: ${res.status}`);
     return (await res.json()) as ApplyResultUI;
   }
 
