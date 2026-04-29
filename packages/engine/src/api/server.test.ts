@@ -773,11 +773,17 @@ describe('cleanup empty-dirs endpoints', () => {
   it('round-trips GET → POST → batch shows up in /api/batches', async () => {
     const { mkdirSync } = await import('node:fs');
     const { DriveRepo } = await import('../drives/repo.js');
+    const { EmptyDirsRepo } = await import('../catalog/empty-dirs-repo.js');
 
     const driveRoot = join(dir, 'cleanup-drive');
     mkdirSync(driveRoot, { recursive: true });
-    mkdirSync(join(driveRoot, 'a', 'b', 'c'), { recursive: true });
-    mkdirSync(join(driveRoot, 'd'), { recursive: true });
+    const onDisk = [
+      join(driveRoot, 'a', 'b', 'c'),
+      join(driveRoot, 'a', 'b'),
+      join(driveRoot, 'a'),
+      join(driveRoot, 'd'),
+    ];
+    for (const p of onDisk) mkdirSync(p, { recursive: true });
     const drive = new DriveRepo(db).upsert({
       volumeSerial: 'CLN',
       label: 'CLN',
@@ -788,6 +794,15 @@ describe('cleanup empty-dirs endpoints', () => {
       totalBytes: 1,
       freeBytes: 1,
     });
+    // GET is now SQL-backed, so we have to seed empty_dirs rows. In real
+    // life the scan walker writes these.
+    db.prepare(
+      `INSERT INTO scans (id, drive_id, started_at, status, throttle_profile)
+       VALUES (?, ?, ?, 'completed', 'balanced')`,
+    ).run('scan-cln', drive.id, new Date().toISOString());
+    const repo = new EmptyDirsRepo(db);
+    const now = new Date().toISOString();
+    for (const p of onDisk) repo.upsert(drive.id, p, 'scan-cln', now);
 
     const list = await fetch(
       `http://127.0.0.1:${handle.port}/api/cleanup/empty-dirs?driveId=${drive.id}`,
@@ -799,7 +814,14 @@ describe('cleanup empty-dirs endpoints', () => {
       totalEmpty: number;
       truncated: boolean;
     };
-    expect(listBody.totalEmpty).toBeGreaterThan(0);
+    expect(listBody.totalEmpty).toBe(onDisk.length);
+    expect(new Set(listBody.paths)).toEqual(new Set(onDisk));
+    // deepest-first ordering
+    for (let i = 1; i < listBody.paths.length; i += 1) {
+      expect(listBody.paths[i - 1]!.length).toBeGreaterThanOrEqual(
+        listBody.paths[i]!.length,
+      );
+    }
 
     const apply = await fetch(`http://127.0.0.1:${handle.port}/api/cleanup/empty-dirs/apply`, {
       method: 'POST',

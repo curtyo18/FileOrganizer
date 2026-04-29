@@ -35,13 +35,13 @@ export function Cleanup(_props: CleanupProps) {
         if (reachable.length > 0) {
           const first = reachable[0]!;
           setActiveDriveId(first.id);
-          void scanDrive(first.id);
+          void loadDrive(first.id);
         }
       })
       .catch((e) => setError((e as Error).message));
   }, []);
 
-  const scanDrive = async (driveId: string) => {
+  const loadDrive = async (driveId: string) => {
     setByDrive((prev) => ({
       ...prev,
       [driveId]: {
@@ -83,7 +83,7 @@ export function Cleanup(_props: CleanupProps) {
     setSelected(new Set());
     setExpanded(new Set());
     if (!byDrive[driveId]) {
-      void scanDrive(driveId);
+      void loadDrive(driveId);
     }
   };
 
@@ -136,7 +136,7 @@ export function Cleanup(_props: CleanupProps) {
           ` · batch ${result.batchId.slice(0, 8)}`,
       );
       setSelected(new Set());
-      await scanDrive(activeDriveId);
+      await loadDrive(activeDriveId);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -265,7 +265,7 @@ export function Cleanup(_props: CleanupProps) {
             <div style={{ fontSize: 13, fontWeight: 600 }}>Empty folders</div>
             <div style={{ fontSize: 11, color: 'var(--fg-2)', marginTop: 2 }}>
               {activeState?.loading
-                ? 'scanning…'
+                ? 'loading…'
                 : activeState
                   ? `${activeState.totalEmpty} found${activeState.truncated ? ' (truncated, showing first 5000)' : ''}`
                   : 'pick a drive'}

@@ -527,10 +527,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   app.get('/api/cleanup/empty-dirs', (c) => {
     const driveId = c.req.query('driveId');
     if (!driveId) return c.json({ error: 'driveId required' }, 400);
-    const merged = mergeDriveRoots(drives, {});
-    const root = merged.get(driveId);
-    if (!root) return c.json({ error: 'no mount path for drive' }, 400);
-    const result = findEmptyDirs(root);
+    const result = findEmptyDirs(opts.db, driveId);
     return c.json({ driveId, ...result });
   });
 

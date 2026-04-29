@@ -10,15 +10,28 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openCatalog, closeCatalog, type Catalog } from '../catalog/connection.js';
 import { migrate } from '../catalog/migrate.js';
+import { EmptyDirsRepo } from '../catalog/empty-dirs-repo.js';
 import { findEmptyDirs, removeEmptyDirs } from './empty-dirs.js';
 
 let dir: string;
 let db: Catalog;
+let driveId: string;
+let scanId: string;
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'fileorg-empty-'));
   db = openCatalog(join(dir, 'cat.db'));
   migrate(db);
+  driveId = 'd1';
+  scanId = 's1';
+  db.prepare(
+    `INSERT INTO drives (id, volume_serial, label, current_letter, kind, last_seen_at)
+     VALUES (?, 'S1', 'D1', 'D', 'local', '2026-01-01T00:00:00Z')`,
+  ).run(driveId);
+  db.prepare(
+    `INSERT INTO scans (id, drive_id, started_at, status, throttle_profile)
+     VALUES (?, ?, '2026-01-01T00:00:00Z', 'completed', 'balanced')`,
+  ).run(scanId, driveId);
 });
 
 afterEach(() => {
@@ -27,52 +40,49 @@ afterEach(() => {
 });
 
 describe('findEmptyDirs', () => {
-  it('returns recursively-empty directories sorted deepest-first', () => {
-    const root = join(dir, 'tree');
-    mkdirSync(join(root, 'a', 'b', 'c'), { recursive: true });
-    mkdirSync(join(root, 'd', 'e'), { recursive: true });
-    mkdirSync(join(root, 'has-file'), { recursive: true });
-    writeFileSync(join(root, 'has-file', 'x.txt'), 'x');
-    mkdirSync(join(root, 'mixed', 'sibling-empty'), { recursive: true });
-    writeFileSync(join(root, 'mixed', 'leaf.txt'), 'leaf');
+  it('returns empty_dirs rows for the drive ordered deepest-first', () => {
+    const repo = new EmptyDirsRepo(db);
+    repo.upsert(driveId, '/x/a', scanId, '2026-01-01T00:00:00Z');
+    repo.upsert(driveId, '/x/a/b/c', scanId, '2026-01-01T00:00:00Z');
+    repo.upsert(driveId, '/x/a/b', scanId, '2026-01-01T00:00:00Z');
 
-    const result = findEmptyDirs(root);
-
-    const paths = result.paths;
-    expect(paths).toContain(join(root, 'a', 'b', 'c'));
-    expect(paths).toContain(join(root, 'd', 'e'));
-    expect(paths).toContain(join(root, 'mixed', 'sibling-empty'));
-    expect(paths).not.toContain(join(root, 'has-file'));
-    expect(paths).not.toContain(join(root, 'mixed'));
-
-    for (let i = 1; i < paths.length; i += 1) {
-      expect(paths[i - 1]!.length).toBeGreaterThanOrEqual(paths[i]!.length);
-    }
-
-    expect(result.totalEmpty).toBe(paths.length);
+    const result = findEmptyDirs(db, driveId);
+    expect(result.paths).toEqual(['/x/a/b/c', '/x/a/b', '/x/a']);
+    expect(result.totalEmpty).toBe(3);
     expect(result.truncated).toBe(false);
   });
 
-  it('skips excluded names like node_modules and quarantine', () => {
-    const root = join(dir, 'with-excludes');
-    mkdirSync(join(root, 'node_modules', 'pkg'), { recursive: true });
-    mkdirSync(join(root, '_FileOrganizer_quarantine', 'old'), { recursive: true });
-    mkdirSync(join(root, 'real-empty'), { recursive: true });
-
-    const result = findEmptyDirs(root);
-    expect(result.paths).toContain(join(root, 'real-empty'));
-    expect(result.paths).not.toContain(join(root, 'node_modules', 'pkg'));
-    expect(result.paths).not.toContain(join(root, '_FileOrganizer_quarantine', 'old'));
+  it('flags truncated when the row count exceeds cap', () => {
+    const repo = new EmptyDirsRepo(db);
+    for (let i = 0; i < 30; i += 1) {
+      repo.upsert(driveId, `/x/dir-${String(i).padStart(2, '0')}`, scanId, '2026-01-01T00:00:00Z');
+    }
+    const result = findEmptyDirs(db, driveId, { cap: 10 });
+    expect(result.paths).toHaveLength(10);
+    expect(result.totalEmpty).toBe(30);
+    expect(result.truncated).toBe(true);
   });
 
-  it('flags truncated when the count exceeds cap', () => {
-    const root = join(dir, 'big');
-    for (let i = 0; i < 30; i += 1) {
-      mkdirSync(join(root, `dir-${i}`), { recursive: true });
-    }
-    const result = findEmptyDirs(root, { cap: 10 });
-    expect(result.paths.length).toBeLessThanOrEqual(10);
-    expect(result.truncated).toBe(true);
+  it('isolates results per drive', () => {
+    db.prepare(
+      `INSERT INTO drives (id, volume_serial, label, current_letter, kind, last_seen_at)
+       VALUES ('d2', 'S2', 'D2', 'E', 'local', '2026-01-01T00:00:00Z')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO scans (id, drive_id, started_at, status, throttle_profile)
+       VALUES ('s2', 'd2', '2026-01-01T00:00:00Z', 'completed', 'balanced')`,
+    ).run();
+    const repo = new EmptyDirsRepo(db);
+    repo.upsert(driveId, '/x/a', scanId, '2026-01-01T00:00:00Z');
+    repo.upsert('d2', '/y/b', 's2', '2026-01-01T00:00:00Z');
+
+    expect(findEmptyDirs(db, driveId).paths).toEqual(['/x/a']);
+    expect(findEmptyDirs(db, 'd2').paths).toEqual(['/y/b']);
+  });
+
+  it('returns an empty result when the drive has no rows', () => {
+    const result = findEmptyDirs(db, driveId);
+    expect(result).toEqual({ paths: [], totalEmpty: 0, truncated: false });
   });
 });
 

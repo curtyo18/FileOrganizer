@@ -1,10 +1,8 @@
 import { readdirSync, rmdirSync, statSync } from 'node:fs';
-import { join, resolve, sep } from 'node:path';
+import { resolve, sep } from 'node:path';
 import { BatchesRepo } from '../catalog/batches-repo.js';
+import { EmptyDirsRepo } from '../catalog/empty-dirs-repo.js';
 import type { Catalog } from '../catalog/connection.js';
-import { DEFAULT_EXCLUDED_NAMES, isPathExcluded } from '../scan/exclusions.js';
-
-const DEFAULT_CAP = 5000;
 
 export interface FindEmptyDirsResult {
   paths: string[];
@@ -14,77 +12,22 @@ export interface FindEmptyDirsResult {
 
 export interface FindEmptyDirsOptions {
   cap?: number;
-  excluded?: ReadonlySet<string>;
-  extraExcluded?: readonly string[];
 }
 
 /**
- * Returns absolute paths of directories that are *recursively* empty,
- * meaning they contain no files anywhere in their subtree.
- * Skips anything matched by isPathExcluded so we don't descend into
- * (or report) node_modules / .git / quarantine.
+ * Returns absolute paths of directories that are recursively empty for
+ * `driveId`. Backed by `empty_dirs` rows the scan walker populates, so
+ * this is a constant-time SQL read — no on-demand filesystem walk.
  *
  * Sorted deepest-first so callers can rmdir children before parents.
  */
 export function findEmptyDirs(
-  driveRoot: string,
+  db: Catalog,
+  driveId: string,
   options: FindEmptyDirsOptions = {},
 ): FindEmptyDirsResult {
-  const cap = options.cap ?? DEFAULT_CAP;
-  const excluded = options.excluded ?? DEFAULT_EXCLUDED_NAMES;
-  const extras = options.extraExcluded ?? [];
-  const root = resolve(driveRoot);
-  const collected: string[] = [];
-  let truncated = false;
-
-  const visit = (dir: string): boolean => {
-    if (collected.length >= cap) {
-      truncated = true;
-      return false;
-    }
-    let entries;
-    try {
-      // eslint-disable-next-line no-restricted-syntax -- TODO #11: this is the recursive walker that blocks the event loop; #11's proper fix moves empty-dir detection into the scan walker (no separate walk needed).
-      entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return false;
-    }
-    let containsFiles = false;
-    let allEmpty = true;
-    for (const e of entries) {
-      if (e.isFile()) {
-        containsFiles = true;
-        allEmpty = false;
-        continue;
-      }
-      if (e.isDirectory()) {
-        if (isPathExcluded(e.name, excluded, extras)) {
-          allEmpty = false;
-          continue;
-        }
-        const child = join(dir, e.name);
-        const childEmpty = visit(child);
-        if (!childEmpty) allEmpty = false;
-      } else {
-        allEmpty = false;
-      }
-    }
-    if (containsFiles) return false;
-    if (!allEmpty) return false;
-    if (dir !== root && collected.length < cap) {
-      collected.push(dir);
-    }
-    return true;
-  };
-
-  visit(root);
-  // Deepest first.
-  collected.sort((a, b) => b.length - a.length);
-  return {
-    paths: collected,
-    totalEmpty: collected.length,
-    truncated,
-  };
+  const repo = new EmptyDirsRepo(db);
+  return repo.listForDrive(driveId, options.cap);
 }
 
 export interface RemoveEmptyDirsResult {
@@ -150,7 +93,7 @@ export function removeEmptyDirs(
     }
     let entries;
     try {
-      // eslint-disable-next-line no-restricted-syntax -- TODO #11: per-path readdir before rmdir; bounded but should still move to async fs.promises.readdir.
+      // eslint-disable-next-line no-restricted-syntax -- bounded per-path re-check before rmdir; safe sync. One readdir per known-empty path (not a recursive walk), and the catalog can lag behind disk so we must verify before deleting.
       entries = readdirSync(abs);
     } catch (err) {
       const reason = (err as NodeJS.ErrnoException).code ?? (err as Error).message;
