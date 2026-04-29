@@ -35,6 +35,7 @@ export interface ApplyResultUI {
   batchId: string;
   completed: number;
   failed: number;
+  emptyDirsRemoved: number;
 }
 
 export interface UndoResultUI {
@@ -273,6 +274,7 @@ export class ApiClient {
     operations: PlannedOperationUI[];
     driveRoots: Record<string, string>;
     dryRun?: boolean;
+    removeEmptySourceDirs?: boolean;
   }): Promise<ApplyResultUI> {
     const res = await fetch(`${this.opts.baseUrl}/api/organize/apply`, {
       method: 'POST',

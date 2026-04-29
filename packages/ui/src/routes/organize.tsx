@@ -30,6 +30,7 @@ export function Organize(_props: RoutableProps) {
   const [planRoots, setPlanRoots] = useState<Record<string, string>>({});
   const [showRoots, setShowRoots] = useState<null | 'plan' | 'apply' | 'dryrun'>(null);
   const [busy, setBusy] = useState(false);
+  const [removeEmptySourceDirs, setRemoveEmptySourceDirs] = useState(false);
 
   const reload = () => {
     setError(null);
@@ -128,11 +129,17 @@ export function Organize(_props: RoutableProps) {
         operations: ops,
         driveRoots: merged,
         dryRun: kind === 'dryrun',
+        removeEmptySourceDirs: kind === 'apply' && removeEmptySourceDirs,
       });
       const verb = kind === 'dryrun' ? 'previewed' : 'applied';
+      const sweepNote =
+        kind === 'apply' && result.emptyDirsRemoved > 0
+          ? ` · removed ${result.emptyDirsRemoved} empty folder${result.emptyDirsRemoved === 1 ? '' : 's'}`
+          : '';
       setInfo(
         `${verb} ${result.completed}/${ops.length}` +
           (result.failed > 0 ? ` · ${result.failed} failed` : '') +
+          sweepNote +
           ` · batch ${result.batchId.slice(0, 8)}`,
       );
       if (kind === 'apply') {
@@ -216,6 +223,8 @@ export function Organize(_props: RoutableProps) {
           onApply={() => onApplyClicked('apply')}
           onDryRun={() => onApplyClicked('dryrun')}
           busy={busy}
+          removeEmptySourceDirs={removeEmptySourceDirs}
+          setRemoveEmptySourceDirs={setRemoveEmptySourceDirs}
         />
       )}
 
@@ -348,6 +357,8 @@ interface PlanPanelProps {
   onApply: () => void;
   onDryRun: () => void;
   busy: boolean;
+  removeEmptySourceDirs: boolean;
+  setRemoveEmptySourceDirs: (v: boolean) => void;
 }
 
 function PlanPanel({
@@ -360,6 +371,8 @@ function PlanPanel({
   onApply,
   onDryRun,
   busy,
+  removeEmptySourceDirs,
+  setRemoveEmptySourceDirs,
 }: PlanPanelProps) {
   if (!plan) {
     return (
@@ -409,7 +422,27 @@ function PlanPanel({
         {plan.unresolvedRoles.length ? (
           <span class="pill warn">{plan.unresolvedRoles.length} unresolved</span>
         ) : null}
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 11,
+              color: 'var(--fg-2)',
+              cursor: 'pointer',
+            }}
+            title="After applying, remove any source folders that have become empty"
+          >
+            <input
+              type="checkbox"
+              checked={removeEmptySourceDirs}
+              onChange={(e) =>
+                setRemoveEmptySourceDirs((e.target as HTMLInputElement).checked)
+              }
+            />
+            Also remove source folders that become empty
+          </label>
           <button class="btn ghost sm" onClick={onPlan} disabled={busy}>
             Re-plan
           </button>

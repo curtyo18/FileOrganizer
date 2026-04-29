@@ -581,6 +581,113 @@ describe('applyApprovedBatch', () => {
     expect(existsSync(resolve(destRoot, 'still-here.jpg'))).toBe(false);
   });
 
+  it('removes empty source directories when removeEmptySourceDirs is true', async () => {
+    const sourceDriveId = seedDrive('SRC');
+    const destDriveId = seedDrive('DST');
+    seedScan(sourceDriveId);
+    const ruleId = seedRule('cross-drive-review');
+    const sourceRoot = resolve(dir, 'sweep-src');
+    const destRoot = resolve(dir, 'sweep-dst');
+    mkdirSync(sourceRoot, { recursive: true });
+    mkdirSync(destRoot, { recursive: true });
+    const innerDir = resolve(sourceRoot, 'inner');
+    const sourceA = resolve(innerDir, 'a.jpg');
+    const sourceB = resolve(innerDir, 'b.jpg');
+    const fileA = seedFile(sourceDriveId, sourceA, 'A');
+    const fileB = seedFile(sourceDriveId, sourceB, 'B');
+
+    const ops: PlannedOperation[] = [
+      plannedOp(
+        fileA,
+        ruleId,
+        'cross-drive-move',
+        sourceDriveId,
+        sourceA,
+        destDriveId,
+        resolve(destRoot, 'a.jpg'),
+      ),
+      plannedOp(
+        fileB,
+        ruleId,
+        'cross-drive-move',
+        sourceDriveId,
+        sourceB,
+        destDriveId,
+        resolve(destRoot, 'b.jpg'),
+      ),
+    ];
+
+    const result = await applyApprovedBatch({
+      db,
+      description: 'sweep on',
+      operations: ops,
+      driveRoots: new Map([
+        [sourceDriveId, sourceRoot],
+        [destDriveId, destRoot],
+      ]),
+      chunkBytes: 64 * 1024,
+      removeEmptySourceDirs: true,
+    });
+
+    expect(result.completed).toBe(2);
+    expect(result.emptyDirsRemoved).toBeGreaterThanOrEqual(1);
+    expect(existsSync(innerDir)).toBe(false);
+    expect(existsSync(sourceRoot)).toBe(true);
+  });
+
+  it('leaves source directories alone when removeEmptySourceDirs is false', async () => {
+    const sourceDriveId = seedDrive('SRC');
+    const destDriveId = seedDrive('DST');
+    seedScan(sourceDriveId);
+    const ruleId = seedRule('cross-drive-review');
+    const sourceRoot = resolve(dir, 'no-sweep-src');
+    const destRoot = resolve(dir, 'no-sweep-dst');
+    mkdirSync(sourceRoot, { recursive: true });
+    mkdirSync(destRoot, { recursive: true });
+    const innerDir = resolve(sourceRoot, 'inner');
+    const sourceA = resolve(innerDir, 'a.jpg');
+    const sourceB = resolve(innerDir, 'b.jpg');
+    const fileA = seedFile(sourceDriveId, sourceA, 'A');
+    const fileB = seedFile(sourceDriveId, sourceB, 'B');
+
+    const ops: PlannedOperation[] = [
+      plannedOp(
+        fileA,
+        ruleId,
+        'cross-drive-move',
+        sourceDriveId,
+        sourceA,
+        destDriveId,
+        resolve(destRoot, 'a.jpg'),
+      ),
+      plannedOp(
+        fileB,
+        ruleId,
+        'cross-drive-move',
+        sourceDriveId,
+        sourceB,
+        destDriveId,
+        resolve(destRoot, 'b.jpg'),
+      ),
+    ];
+
+    const result = await applyApprovedBatch({
+      db,
+      description: 'sweep off',
+      operations: ops,
+      driveRoots: new Map([
+        [sourceDriveId, sourceRoot],
+        [destDriveId, destRoot],
+      ]),
+      chunkBytes: 64 * 1024,
+      removeEmptySourceDirs: false,
+    });
+
+    expect(result.completed).toBe(2);
+    expect(result.emptyDirsRemoved).toBe(0);
+    expect(existsSync(innerDir)).toBe(true);
+  });
+
   it('records completed-via-existing when destination already has identical content', async () => {
     const driveId = seedDrive('V');
     seedScan(driveId);

@@ -1,3 +1,5 @@
+import { readdirSync, rmdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { DriveError, IntegrityError } from '@fileorganizer/shared';
 import type { Catalog } from '../catalog/connection.js';
 import { BatchesRepo } from '../catalog/batches-repo.js';
@@ -7,6 +9,8 @@ import { hashFile } from '../scan/hasher.js';
 import { moveCrossDrive } from './move-cross-drive.js';
 import { moveSameDrive, type MoveOutcome } from './move-same-drive.js';
 import type { PlannedOperation } from './planner.js';
+
+const QUARANTINE_DIR_NAME = '_FileOrganizer_quarantine';
 
 const FREE_SPACE_SAFETY_FRACTION = 0.05;
 
@@ -69,12 +73,14 @@ export interface ApplyApprovedBatchInput {
   driveRoots: Map<string, string>;
   chunkBytes: number;
   dryRun?: boolean;
+  removeEmptySourceDirs?: boolean;
 }
 
 export interface ApplyApprovedBatchResult {
   batchId: string;
   completed: number;
   failed: number;
+  emptyDirsRemoved: number;
 }
 
 export async function applyApprovedBatch(
@@ -103,6 +109,7 @@ async function runBatch(input: ApplyApprovedBatchInput): Promise<ApplyApprovedBa
 
   let completed = 0;
   let failed = 0;
+  const successfulSourceDirs = new Set<string>();
 
   for (const op of input.operations) {
     const ledgerOp = batches.recordOperation(batch.id, {
@@ -126,6 +133,7 @@ async function runBatch(input: ApplyApprovedBatchInput): Promise<ApplyApprovedBa
         const destPathUpdate =
           outcome.finalDestPath !== op.destPath ? { destPath: outcome.finalDestPath } : {};
         batches.updateOperationStatus(ledgerOp.id, finalStatus, destPathUpdate);
+        successfulSourceDirs.add(`${op.sourceDriveId}\t${dirname(op.sourcePath)}`);
       }
       completed += 1;
     } catch (err) {
@@ -149,8 +157,63 @@ async function runBatch(input: ApplyApprovedBatchInput): Promise<ApplyApprovedBa
     }
   }
 
-  batches.finish(batch.id, failed === 0 ? 'completed' : 'failed', { completed, failed });
-  return { batchId: batch.id, completed, failed };
+  let emptyDirsRemoved = 0;
+  if (input.removeEmptySourceDirs && !input.dryRun && successfulSourceDirs.size > 0) {
+    emptyDirsRemoved = sweepEmptySourceDirs(successfulSourceDirs, input.driveRoots);
+  }
+
+  batches.finish(batch.id, failed === 0 ? 'completed' : 'failed', {
+    completed,
+    failed,
+    emptyDirsRemoved,
+  });
+  return { batchId: batch.id, completed, failed, emptyDirsRemoved };
+}
+
+function sweepEmptySourceDirs(
+  successfulSourceDirs: Set<string>,
+  driveRoots: Map<string, string>,
+): number {
+  const candidates = new Set<string>();
+  for (const key of successfulSourceDirs) {
+    const tab = key.indexOf('\t');
+    if (tab < 0) continue;
+    const driveId = key.slice(0, tab);
+    const dir = key.slice(tab + 1);
+    const root = driveRoots.get(driveId);
+    if (!root) continue;
+    for (const ancestor of ancestorsUpTo(dir, root)) {
+      candidates.add(ancestor);
+    }
+  }
+  // Deepest paths first so children get a chance to be removed before parents.
+  const ordered = [...candidates].sort((a, b) => b.length - a.length);
+  let removed = 0;
+  for (const d of ordered) {
+    try {
+      if (readdirSync(d).length === 0) {
+        rmdirSync(d);
+        removed += 1;
+      }
+    } catch {
+      // ENOTEMPTY / ENOENT / EBUSY — best-effort, swallow.
+    }
+  }
+  return removed;
+}
+
+function ancestorsUpTo(startDir: string, driveRoot: string): string[] {
+  const root = resolve(driveRoot);
+  const out: string[] = [];
+  let cur = resolve(startDir);
+  while (cur && cur !== root && cur.length > root.length) {
+    if (cur.split(/[\\/]/).includes(QUARANTINE_DIR_NAME)) break;
+    out.push(cur);
+    const parent = dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  return out;
 }
 
 function assertFreeSpace(input: ApplyApprovedBatchInput): void {

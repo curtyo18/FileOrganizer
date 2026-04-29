@@ -479,6 +479,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       operations: PlannedOperation[];
       driveRoots?: Record<string, string>;
       dryRun?: boolean;
+      removeEmptySourceDirs?: boolean;
     };
     try {
       const result = await applyApprovedBatch({
@@ -488,6 +489,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
         driveRoots: mergeDriveRoots(drives, body.driveRoots ?? {}),
         chunkBytes: 1024 * 1024,
         dryRun: body.dryRun === true,
+        removeEmptySourceDirs: body.removeEmptySourceDirs === true,
       });
       events.publish({
         type: 'batch-status',
