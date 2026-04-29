@@ -30,21 +30,41 @@ export function migrate(db: Catalog): void {
     const version = parseInt(file.slice(0, 4), 10);
     if (version <= current) continue;
     const sql = readFileSync(join(MIGRATIONS_DIR, file), 'utf-8');
-    const tx = db.transaction(() => {
-      db.exec(sql);
-      db.prepare(`INSERT INTO schema_version (version, applied_at) VALUES (?, ?)`).run(
-        version,
-        new Date().toISOString(),
-      );
-    });
+
+    // Schema-rebuild migrations (e.g. CHECK constraint widening via the
+    // CREATE/INSERT/DROP/RENAME dance) hit "FOREIGN KEY constraint failed"
+    // on the DROP step when the rebuilt table is referenced by another
+    // table's FK. SQLite enforces this schema-level check at DROP time
+    // regardless of `defer_foreign_keys`, and `PRAGMA foreign_keys` can't
+    // be toggled inside a transaction. Disable FKs around each migration's
+    // transaction, then re-enable and verify integrity with foreign_key_check.
+    db.pragma('foreign_keys = OFF');
     try {
-      tx();
-    } catch (err) {
-      throw new CatalogError(
-        'MIGRATION_FAILED',
-        `migration ${file} failed: ${(err as Error).message}`,
-        err,
-      );
+      const tx = db.transaction(() => {
+        db.exec(sql);
+        db.prepare(`INSERT INTO schema_version (version, applied_at) VALUES (?, ?)`).run(
+          version,
+          new Date().toISOString(),
+        );
+      });
+      try {
+        tx();
+      } catch (err) {
+        throw new CatalogError(
+          'MIGRATION_FAILED',
+          `migration ${file} failed: ${(err as Error).message}`,
+          err,
+        );
+      }
+      const violations = db.pragma('foreign_key_check') as unknown[];
+      if (violations.length > 0) {
+        throw new CatalogError(
+          'MIGRATION_FK_VIOLATIONS',
+          `migration ${file} left ${violations.length} foreign-key violations`,
+        );
+      }
+    } finally {
+      db.pragma('foreign_keys = ON');
     }
   }
 }

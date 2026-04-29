@@ -1,5 +1,9 @@
 -- SQLite can't ALTER a CHECK constraint in place; rebuild the scans table
 -- so its status enum admits 'cancelled' alongside the existing values.
+-- The migrate runner disables foreign_keys for the duration of each
+-- migration's transaction (re-enabling + running foreign_key_check after),
+-- so the DROP/RENAME below is safe even though files.scan_id references
+-- scans(id).
 CREATE TABLE scans_new (
     id TEXT PRIMARY KEY,
     drive_id TEXT NOT NULL REFERENCES drives(id),
