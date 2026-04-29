@@ -24,6 +24,7 @@ import { RolesRepo, type CreateRoleInput, type UpdateRoleInput } from '../roles/
 import { planOrganize, type PlannedOperation } from '../organize/planner.js';
 import { applyApprovedBatch, autoApply } from '../organize/applier.js';
 import { undoBatch } from '../organize/undo.js';
+import { findEmptyDirs, removeEmptyDirs } from '../cleanup/empty-dirs.js';
 import { DriveError, RuleError, type Settings } from '@fileorganizer/shared';
 import { EventBus } from './events.js';
 
@@ -520,6 +521,32 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400);
     }
+  });
+
+  app.get('/api/cleanup/empty-dirs', (c) => {
+    const driveId = c.req.query('driveId');
+    if (!driveId) return c.json({ error: 'driveId required' }, 400);
+    const merged = mergeDriveRoots(drives, {});
+    const root = merged.get(driveId);
+    if (!root) return c.json({ error: 'no mount path for drive' }, 400);
+    const result = findEmptyDirs(root);
+    return c.json({ driveId, ...result });
+  });
+
+  app.post('/api/cleanup/empty-dirs/apply', async (c) => {
+    const body = (await c.req.json()) as { driveId: string; paths: string[] };
+    if (!body.driveId) return c.json({ error: 'driveId required' }, 400);
+    if (!Array.isArray(body.paths)) return c.json({ error: 'paths must be an array' }, 400);
+    const merged = mergeDriveRoots(drives, {});
+    const root = merged.get(body.driveId);
+    if (!root) return c.json({ error: 'no mount path for drive' }, 400);
+    const result = removeEmptyDirs(opts.db, { driveRoot: root, paths: body.paths });
+    events.publish({
+      type: 'batch-status',
+      batchId: result.batchId,
+      status: result.failed.length === 0 ? 'completed' : 'failed',
+    });
+    return c.json(result);
   });
 
   app.get('/api/batches', (c) => {

@@ -56,6 +56,7 @@ export function defaultShortcuts(): ShortcutMap {
     go: () => route('/organize'),
     gu: () => route('/duplicates'),
     gh: () => route('/history'),
+    gx: () => route('/cleanup'),
     gq: () => route('/quarantine'),
     gr: () => route('/roles'),
     gt: () => route('/throttle'),

@@ -13,6 +13,7 @@ import { Organize } from './routes/organize.js';
 import { Roles } from './routes/roles.js';
 import { Throttle } from './routes/throttle.js';
 import { History } from './routes/history.js';
+import { Cleanup } from './routes/cleanup.js';
 import { Quarantine } from './routes/quarantine.js';
 import { useKeyboardShortcuts, defaultShortcuts } from './hooks/use-keyboard.js';
 
@@ -67,6 +68,7 @@ export function App() {
             <Route path="/roles" component={Roles} />
             <Route path="/throttle" component={Throttle} />
             <Route path="/history" component={History} />
+            <Route path="/cleanup" component={Cleanup} />
             <Route path="/quarantine" component={Quarantine} />
           </Router>
         </div>

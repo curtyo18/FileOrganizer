@@ -20,6 +20,7 @@ const KIND_FILTERS: Array<'all' | BatchKind> = [
   'restore',
   'one-off-move',
   'quarantine-empty',
+  'cleanup-empty-dirs',
 ];
 
 const STATUS_FILTERS: Array<'all' | OperationStatus> = [

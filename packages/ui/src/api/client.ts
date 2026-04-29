@@ -328,6 +328,44 @@ export class ApiClient {
     return data.scan;
   }
 
+  async listEmptyDirs(driveId: string): Promise<{
+    driveId: string;
+    paths: string[];
+    totalEmpty: number;
+    truncated: boolean;
+  }> {
+    return this.get<{
+      driveId: string;
+      paths: string[];
+      totalEmpty: number;
+      truncated: boolean;
+    }>(`/api/cleanup/empty-dirs?driveId=${encodeURIComponent(driveId)}`);
+  }
+
+  async applyCleanupEmptyDirs(input: {
+    driveId: string;
+    paths: string[];
+  }): Promise<{
+    batchId: string;
+    removed: number;
+    failed: { path: string; reason: string }[];
+  }> {
+    const res = await fetch(`${this.opts.baseUrl}/api/cleanup/empty-dirs/apply`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`applyCleanupEmptyDirs: ${res.status} ${body}`);
+    }
+    return res.json() as Promise<{
+      batchId: string;
+      removed: number;
+      failed: { path: string; reason: string }[];
+    }>;
+  }
+
   async cancelScan(scanId: string): Promise<unknown> {
     const res = await fetch(
       `${this.opts.baseUrl}/api/scans/${encodeURIComponent(scanId)}/cancel`,

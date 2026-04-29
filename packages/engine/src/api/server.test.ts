@@ -765,6 +765,61 @@ describe('fs/list endpoint', () => {
   });
 });
 
+describe('cleanup empty-dirs endpoints', () => {
+  it('round-trips GET → POST → batch shows up in /api/batches', async () => {
+    const { mkdirSync } = await import('node:fs');
+    const { DriveRepo } = await import('../drives/repo.js');
+
+    const driveRoot = join(dir, 'cleanup-drive');
+    mkdirSync(driveRoot, { recursive: true });
+    mkdirSync(join(driveRoot, 'a', 'b', 'c'), { recursive: true });
+    mkdirSync(join(driveRoot, 'd'), { recursive: true });
+    const drive = new DriveRepo(db).upsert({
+      volumeSerial: 'CLN',
+      label: 'CLN',
+      currentLetter: null,
+      mountPath: driveRoot,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1,
+      freeBytes: 1,
+    });
+
+    const list = await fetch(
+      `http://127.0.0.1:${handle.port}/api/cleanup/empty-dirs?driveId=${drive.id}`,
+    );
+    expect(list.status).toBe(200);
+    const listBody = (await list.json()) as {
+      driveId: string;
+      paths: string[];
+      totalEmpty: number;
+      truncated: boolean;
+    };
+    expect(listBody.totalEmpty).toBeGreaterThan(0);
+
+    const apply = await fetch(`http://127.0.0.1:${handle.port}/api/cleanup/empty-dirs/apply`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ driveId: drive.id, paths: listBody.paths }),
+    });
+    expect(apply.status).toBe(200);
+    const applyBody = (await apply.json()) as {
+      batchId: string;
+      removed: number;
+      failed: { path: string; reason: string }[];
+    };
+    expect(applyBody.removed).toBe(listBody.paths.length);
+
+    const batchesRes = await fetch(`http://127.0.0.1:${handle.port}/api/batches`);
+    const batchesBody = (await batchesRes.json()) as {
+      batches: { id: string; kind: string }[];
+    };
+    const found = batchesBody.batches.find((b) => b.id === applyBody.batchId);
+    expect(found).toBeTruthy();
+    expect(found!.kind).toBe('cleanup-empty-dirs');
+  });
+});
+
 describe('duplicates pagination', () => {
   it('paginates groups by reclaimable bytes desc with total/hasMore', async () => {
     const { DriveRepo } = await import('../drives/repo.js');

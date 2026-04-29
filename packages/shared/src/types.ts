@@ -35,7 +35,8 @@ export type BatchKind =
   | 'quarantine-empty'
   | 'restore'
   | 'undo'
-  | 'one-off-move';
+  | 'one-off-move'
+  | 'cleanup-empty-dirs';
 
 export type OperationKind = 'move' | 'copy' | 'quarantine' | 'restore' | 'delete';
 
