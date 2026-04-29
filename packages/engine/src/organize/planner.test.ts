@@ -220,6 +220,39 @@ describe('planOrganize', () => {
     expect(plan.unresolvedRoles[0]!.reason).toContain('archive');
   });
 
+  it('aggregates many files matching the same unresolved rule into a single entry with fileCount', () => {
+    const sourceDriveId = seedDrive('PRIMARY');
+    const archiveDriveId = seedDrive('ARCHIVE');
+    new RulesRepo(db).create({
+      name: 'archive',
+      priority: 100,
+      match: { category: ['image'] },
+      destinationRole: 'archive',
+      destinationTemplate: 'Archive/{filename}',
+      movePolicy: 'cross-drive-review',
+      quarantinePolicy: 'default',
+    });
+    const sourceRoot = resolve(dir, 'PRIMARY');
+    for (let i = 0; i < 50; i++) {
+      seedFile({
+        driveId: sourceDriveId,
+        path: resolve(sourceRoot, `f${i}.jpg`),
+        name: `f${i}.jpg`,
+      });
+    }
+
+    const plan = planOrganize({
+      db,
+      driveRoots: new Map([[sourceDriveId, sourceRoot]]),
+      roles: [role('archive', [archiveDriveId])],
+    });
+
+    expect(plan.operations).toHaveLength(0);
+    expect(plan.unresolvedRoles).toHaveLength(1);
+    expect(plan.unresolvedRoles[0]!.fileCount).toBe(50);
+    expect(plan.unresolvedRoles[0]!.reason).toContain('archive');
+  });
+
   it('reports per-rule wouldMatch vs actualMatch so the UI can flag shadowed rules', () => {
     const driveId = seedDrive('PRIMARY');
     const broadId = new RulesRepo(db).create({

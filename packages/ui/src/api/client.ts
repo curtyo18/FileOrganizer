@@ -27,7 +27,7 @@ export interface RuleStatUI {
 export interface OrganizePlanResponse {
   operations: PlannedOperationUI[];
   unmatched: number[];
-  unresolvedRoles: { ruleId: string; reason: string }[];
+  unresolvedRoles: { ruleId: string; reason: string; fileCount: number }[];
   ruleStats: RuleStatUI[];
 }
 

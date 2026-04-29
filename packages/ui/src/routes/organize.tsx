@@ -464,9 +464,9 @@ function PlanPanel({
           {plan.unresolvedRoles
             .map((u) => {
               const r = ruleById.get(u.ruleId);
-              return `${r?.name ?? u.ruleId}: ${u.reason}`;
+              return `${r?.name ?? u.ruleId}: ${u.reason} (×${u.fileCount})`;
             })
-            .join(' · ')}
+            .join('; ')}
         </div>
       ) : null}
 

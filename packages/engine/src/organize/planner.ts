@@ -28,6 +28,7 @@ export interface PlannedOperation {
 export interface UnresolvedRole {
   ruleId: string;
   reason: string;
+  fileCount: number;
 }
 
 export interface RuleStat {
@@ -60,9 +61,18 @@ export function planOrganize(input: PlanInput): OrganizePlan {
 
   const operations: PlannedOperation[] = [];
   const unmatched: number[] = [];
-  const unresolvedRoles: UnresolvedRole[] = [];
+  const unresolvedByRule = new Map<string, UnresolvedRole>();
   const wouldMatchCounts = new Map<string, number>(rules.map((r) => [r.id, 0]));
   const actualMatchCounts = new Map<string, number>(rules.map((r) => [r.id, 0]));
+
+  const recordUnresolved = (ruleId: string, reason: string): void => {
+    const existing = unresolvedByRule.get(ruleId);
+    if (existing) {
+      existing.fileCount += 1;
+    } else {
+      unresolvedByRule.set(ruleId, { ruleId, reason, fileCount: 1 });
+    }
+  };
 
   const rows = input.db
     .prepare(`SELECT * FROM files WHERE state = 'indexed' ORDER BY id`)
@@ -85,26 +95,20 @@ export function planOrganize(input: PlanInput): OrganizePlan {
 
     const role = roleByName.get(rule.destinationRole);
     if (!role) {
-      unresolvedRoles.push({
-        ruleId: rule.id,
-        reason: `unknown role "${rule.destinationRole}"`,
-      });
+      recordUnresolved(rule.id, `unknown role "${rule.destinationRole}"`);
       continue;
     }
 
     const resolved = resolveRole({ role, drives: drivesById });
     if (!resolved.driveId) {
-      unresolvedRoles.push({ ruleId: rule.id, reason: resolved.reason });
+      recordUnresolved(rule.id, resolved.reason);
       continue;
     }
 
     const destDrive = drivesById.get(resolved.driveId)!;
     const destDriveRoot = input.driveRoots.get(resolved.driveId);
     if (!destDriveRoot) {
-      unresolvedRoles.push({
-        ruleId: rule.id,
-        reason: `no drive root supplied for drive ${resolved.driveId}`,
-      });
+      recordUnresolved(rule.id, `no drive root supplied for drive ${resolved.driveId}`);
       continue;
     }
 
@@ -138,7 +142,12 @@ export function planOrganize(input: PlanInput): OrganizePlan {
     actualMatch: actualMatchCounts.get(r.id) ?? 0,
   }));
 
-  return { operations, unmatched, unresolvedRoles, ruleStats };
+  return {
+    operations,
+    unmatched,
+    unresolvedRoles: [...unresolvedByRule.values()],
+    ruleStats,
+  };
 }
 
 function rowToFileRecord(row: Record<string, unknown>): FileRecord {
