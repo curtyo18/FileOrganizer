@@ -871,6 +871,78 @@ describe('preview endpoint', () => {
     expect(res.status).toBe(404);
   });
 
+  it('serves the second request from disk cache (cache mtime unchanged)', async () => {
+    const sharp = (await import('sharp')).default;
+    const { mkdirSync, statSync } = await import('node:fs');
+    const { DriveRepo } = await import('../drives/repo.js');
+    const { FilesRepo } = await import('../catalog/files-repo.js');
+
+    const driveRoot = join(dir, 'cache-drive');
+    mkdirSync(driveRoot, { recursive: true });
+    const drive = new DriveRepo(db).upsert({
+      volumeSerial: 'CACHE',
+      label: 'CACHE',
+      currentLetter: null,
+      mountPath: driveRoot,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1,
+      freeBytes: 1,
+    });
+    db.prepare(
+      `INSERT OR IGNORE INTO scans (id, drive_id, started_at, status, throttle_profile)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run('scan-cache', drive.id, new Date().toISOString(), 'completed', 'balanced');
+
+    const imgPath = join(driveRoot, 'cached.png');
+    await sharp({
+      create: { width: 16, height: 16, channels: 3, background: { r: 10, g: 200, b: 80 } },
+    })
+      .png()
+      .toFile(imgPath);
+
+    const sha = 'cafef00d'.repeat(8);
+    new FilesRepo(db).upsertOne({
+      driveId: drive.id,
+      path: imgPath,
+      name: 'cached.png',
+      extension: 'png',
+      sizeBytes: 256,
+      category: 'image',
+      sha256: sha,
+      mtime: '2024-01-01T00:00:00.000Z',
+      ctime: '2024-01-01T00:00:00.000Z',
+      exifDate: null,
+      dateSource: 'mtime',
+      width: 16,
+      height: 16,
+      durationSeconds: null,
+      ntfsFileId: null,
+      state: 'indexed',
+      scanId: 'scan-cache',
+    });
+    const fileId = (
+      db.prepare(`SELECT id FROM files WHERE path = ?`).get(imgPath) as { id: number }
+    ).id;
+
+    const url = `http://127.0.0.1:${handle.port}/api/preview/${fileId}?max=64`;
+    const first = await fetch(url);
+    expect(first.status).toBe(200);
+    await first.arrayBuffer();
+
+    const cachePath = join(dir, 'preview-cache', sha.slice(0, 2), `${sha}-64.jpg`);
+    const firstMtime = statSync(cachePath).mtimeMs;
+
+    await new Promise((r) => setTimeout(r, 30));
+
+    const second = await fetch(url);
+    expect(second.status).toBe(200);
+    await second.arrayBuffer();
+
+    const secondMtime = statSync(cachePath).mtimeMs;
+    expect(secondMtime).toBe(firstMtime);
+  });
+
   it('returns 400 when the file is not an image', async () => {
     const { mkdirSync, writeFileSync } = await import('node:fs');
     const { DriveRepo } = await import('../drives/repo.js');

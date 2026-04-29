@@ -57,6 +57,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
     db,
     port: opts.port ?? 0,
     hostname: '127.0.0.1',
+    catalogPath: ptr.catalogPath,
     onSettingsChanged: (next) => {
       const activeProfile = throttleManager.current().name;
       throttleManager = new ThrottleManager(

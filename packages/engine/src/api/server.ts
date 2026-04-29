@@ -1,10 +1,12 @@
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { existsSync, readdirSync } from 'node:fs';
+import { createReadStream, existsSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
+import { ensurePreviewCacheDir, getOrCreatePreview } from './preview-cache.js';
 import type { Catalog } from '../catalog/connection.js';
 import { DriveRepo } from '../drives/repo.js';
 import { ScansRepo } from '../catalog/scans-repo.js';
@@ -29,6 +31,7 @@ export interface CreateServerOptions {
   db: Catalog;
   port: number;
   hostname: string;
+  catalogPath?: string;
   onSettingsChanged?: (settings: Settings) => void;
 }
 
@@ -194,14 +197,22 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     return c.json({ entries });
   });
 
+  const catalogDir = opts.catalogPath
+    ? dirname(opts.catalogPath)
+    : (() => {
+        const name = (opts.db as unknown as { name?: string }).name;
+        return name ? dirname(name) : process.cwd();
+      })();
+  ensurePreviewCacheDir(catalogDir);
+
   app.get('/api/preview/:fileId', async (c) => {
     const fileId = parseInt(c.req.param('fileId'), 10);
     if (Number.isNaN(fileId)) return c.json({ error: 'invalid file id' }, 400);
     const requested = parseInt(c.req.query('max') ?? '256', 10);
     const max = Math.min(Math.max(Number.isFinite(requested) ? requested : 256, 16), 2048);
     const row = opts.db
-      .prepare(`SELECT path, category FROM files WHERE id = ?`)
-      .get(fileId) as { path: string; category: string } | undefined;
+      .prepare(`SELECT path, category, sha256 FROM files WHERE id = ?`)
+      .get(fileId) as { path: string; category: string; sha256: string } | undefined;
     if (!row) return c.json({ error: 'file not found' }, 404);
     if (row.category !== 'image') return c.json({ error: 'not an image' }, 400);
     const allowedRoots = drives
@@ -212,13 +223,29 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       return c.json({ error: 'path is not under a registered drive' }, 403);
     }
     if (!existsSync(row.path)) return c.json({ error: 'file missing on disk' }, 404);
+    let sourceMtimeMs: number;
     try {
-      const buf = await sharp(row.path)
-        .rotate()
-        .resize(max, max, { fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality: 80 })
-        .toBuffer();
-      return new Response(new Uint8Array(buf), {
+      sourceMtimeMs = statSync(row.path).mtimeMs;
+    } catch {
+      sourceMtimeMs = 0;
+    }
+    try {
+      const cachePath = await getOrCreatePreview({
+        catalogDir,
+        sha256: row.sha256,
+        sourcePath: row.path,
+        sourceMtimeMs,
+        max,
+        resize: async (src, m) =>
+          sharp(src)
+            .rotate()
+            .resize(m, m, { fit: 'inside', withoutEnlargement: true })
+            .jpeg({ quality: 80 })
+            .toBuffer(),
+      });
+      const stream = createReadStream(cachePath);
+      const webStream = Readable.toWeb(stream) as ReadableStream;
+      return new Response(webStream, {
         headers: {
           'content-type': 'image/jpeg',
           'cache-control': 'max-age=300',
