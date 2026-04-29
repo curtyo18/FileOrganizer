@@ -231,7 +231,11 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
 
   app.get('/api/duplicates', (c) => {
     const minSize = Math.max(parseInt(c.req.query('minSize') ?? '1', 10), 1);
-    const plan = planDedupe(opts.db, { minSizeBytes: minSize });
+    const rawLimit = parseInt(c.req.query('limit') ?? '50', 10);
+    const limit = Math.min(Math.max(Number.isFinite(rawLimit) ? rawLimit : 50, 1), 500);
+    const rawOffset = parseInt(c.req.query('offset') ?? '0', 10);
+    const offset = Math.max(Number.isFinite(rawOffset) ? rawOffset : 0, 0);
+    const plan = planDedupe(opts.db, { minSizeBytes: minSize, limit, offset });
     return c.json(plan);
   });
 

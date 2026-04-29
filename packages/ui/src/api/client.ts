@@ -72,6 +72,8 @@ export interface DedupeOperation {
 export interface DedupePlanResponse {
   operations: DedupeOperation[];
   groups: DuplicateGroupUI[];
+  total: number;
+  hasMore: boolean;
 }
 
 export interface QuarantineEntryUI {
@@ -111,8 +113,17 @@ export class ApiClient {
     return data.scans;
   }
 
-  async listDuplicates(minSize = 1): Promise<DedupePlanResponse> {
-    return this.get<DedupePlanResponse>(`/api/duplicates?minSize=${minSize}`);
+  async listDuplicates(input: {
+    minSize?: number;
+    limit?: number;
+    offset?: number;
+  } = {}): Promise<DedupePlanResponse> {
+    const minSize = input.minSize ?? 1;
+    const limit = input.limit ?? 50;
+    const offset = input.offset ?? 0;
+    return this.get<DedupePlanResponse>(
+      `/api/duplicates?minSize=${minSize}&limit=${limit}&offset=${offset}`,
+    );
   }
 
   async applyDedupe(input: {

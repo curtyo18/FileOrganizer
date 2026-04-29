@@ -729,6 +729,82 @@ describe('fs/list endpoint', () => {
   });
 });
 
+describe('duplicates pagination', () => {
+  it('paginates groups by reclaimable bytes desc with total/hasMore', async () => {
+    const { DriveRepo } = await import('../drives/repo.js');
+    const { FilesRepo } = await import('../catalog/files-repo.js');
+    const drive = new DriveRepo(db).upsert({
+      volumeSerial: 'DUP',
+      label: 'DUP',
+      currentLetter: null,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1,
+      freeBytes: 1,
+    });
+    db.prepare(
+      `INSERT OR IGNORE INTO scans (id, drive_id, started_at, status, throttle_profile)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run('scan-dup', drive.id, new Date().toISOString(), 'completed', 'balanced');
+    const files = new FilesRepo(db);
+    for (let i = 0; i < 60; i += 1) {
+      const sha = `h${String(i).padStart(3, '0')}`;
+      const size = 100 + i;
+      for (const tag of ['a', 'b']) {
+        files.upsertOne({
+          driveId: drive.id,
+          path: `/p${i}-${tag}.jpg`,
+          name: `p${i}-${tag}.jpg`,
+          extension: 'jpg',
+          sizeBytes: size,
+          category: 'image',
+          sha256: sha,
+          mtime: '2024-01-01T00:00:00.000Z',
+          ctime: '2024-01-01T00:00:00.000Z',
+          exifDate: null,
+          dateSource: 'mtime',
+          width: null,
+          height: null,
+          durationSeconds: null,
+          ntfsFileId: null,
+          state: 'indexed',
+          scanId: 'scan-dup',
+        });
+      }
+    }
+
+    const first = await fetch(
+      `http://127.0.0.1:${handle.port}/api/duplicates?minSize=1&limit=20&offset=0`,
+    );
+    expect(first.status).toBe(200);
+    const firstBody = (await first.json()) as {
+      groups: Array<{ sha256: string; reclaimableBytes: number }>;
+      total: number;
+      hasMore: boolean;
+    };
+    expect(firstBody.total).toBe(60);
+    expect(firstBody.groups.length).toBe(20);
+    expect(firstBody.hasMore).toBe(true);
+    for (let i = 1; i < firstBody.groups.length; i += 1) {
+      expect(firstBody.groups[i - 1]!.reclaimableBytes).toBeGreaterThanOrEqual(
+        firstBody.groups[i]!.reclaimableBytes,
+      );
+    }
+
+    const last = await fetch(
+      `http://127.0.0.1:${handle.port}/api/duplicates?minSize=1&limit=20&offset=40`,
+    );
+    expect(last.status).toBe(200);
+    const lastBody = (await last.json()) as {
+      groups: unknown[];
+      total: number;
+      hasMore: boolean;
+    };
+    expect(lastBody.groups.length).toBe(20);
+    expect(lastBody.hasMore).toBe(false);
+  });
+});
+
 describe('preview endpoint', () => {
   it('serves a resized JPEG for an indexed image', async () => {
     const sharp = (await import('sharp')).default;

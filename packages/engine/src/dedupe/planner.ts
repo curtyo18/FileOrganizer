@@ -1,4 +1,4 @@
-import { detectDuplicates, type DuplicateGroup } from './detect.js';
+import { detectDuplicates, countDuplicateGroups, type DuplicateGroup } from './detect.js';
 import { scoreCopies, type DriveContext } from './scorer.js';
 import type { Catalog } from '../catalog/connection.js';
 
@@ -12,15 +12,29 @@ export interface DedupeOperation {
 
 export interface PlanDedupeOptions {
   minSizeBytes: number;
+  limit?: number;
+  offset?: number;
 }
 
 export interface DedupePlan {
   operations: DedupeOperation[];
   groups: DuplicateGroup[];
+  total: number;
+  hasMore: boolean;
 }
 
+const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 500;
+
 export function planDedupe(db: Catalog, opts: PlanDedupeOptions): DedupePlan {
-  const groups = detectDuplicates(db, { minSizeBytes: opts.minSizeBytes });
+  const offset = Math.max(opts.offset ?? 0, 0);
+  const limit = Math.min(Math.max(opts.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
+  const total = countDuplicateGroups(db, { minSizeBytes: opts.minSizeBytes });
+  const groups = detectDuplicates(db, {
+    minSizeBytes: opts.minSizeBytes,
+    limit,
+    offset,
+  });
   const driveRows = db
     .prepare(`SELECT id, kind, roles FROM drives`)
     .all() as { id: string; kind: 'local' | 'external' | 'network'; roles: string }[];
@@ -46,5 +60,6 @@ export function planDedupe(db: Catalog, opts: PlanDedupeOptions): DedupePlan {
       });
     }
   }
-  return { operations, groups };
+  const hasMore = offset + groups.length < total;
+  return { operations, groups, total, hasMore };
 }

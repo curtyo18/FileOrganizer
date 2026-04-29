@@ -39,7 +39,7 @@ export function Duplicates(_props: DuplicatesProps) {
   const [filter, setFilter] = useState<'all' | 'image' | 'video' | 'document'>('all');
 
   const reload = () => {
-    Promise.all([api.listDrives(), api.listDuplicates(1024)])
+    Promise.all([api.listDrives(), api.listDuplicates({ minSize: 1024 })])
       .then(([d, p]) => {
         setDrives(d);
         setPlan(p);

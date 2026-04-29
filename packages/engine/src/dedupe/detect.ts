@@ -20,10 +20,14 @@ export interface DuplicateGroup {
 
 export interface DetectOptions {
   minSizeBytes: number;
+  limit?: number;
+  offset?: number;
 }
 
 export function detectDuplicates(db: Catalog, opts: DetectOptions): DuplicateGroup[] {
   const minSize = Math.max(opts.minSizeBytes, 1);
+  const limit = opts.limit ?? -1;
+  const offset = Math.max(opts.offset ?? 0, 0);
   const hashes = db
     .prepare(
       `SELECT sha256, COUNT(*) AS copies, MIN(size_bytes) AS size
@@ -31,9 +35,10 @@ export function detectDuplicates(db: Catalog, opts: DetectOptions): DuplicateGro
        WHERE state = 'indexed' AND size_bytes >= ?
        GROUP BY sha256
        HAVING copies > 1
-       ORDER BY (copies - 1) * MIN(size_bytes) DESC`,
+       ORDER BY (copies - 1) * MIN(size_bytes) DESC
+       LIMIT ? OFFSET ?`,
     )
-    .all(minSize) as { sha256: string; copies: number; size: number }[];
+    .all(minSize, limit, offset) as { sha256: string; copies: number; size: number }[];
   return hashes.map((row) => {
     const copies = db
       .prepare(
@@ -48,4 +53,19 @@ export function detectDuplicates(db: Catalog, opts: DetectOptions): DuplicateGro
       reclaimableBytes: (copies.length - 1) * row.size,
     };
   });
+}
+
+export function countDuplicateGroups(db: Catalog, opts: { minSizeBytes: number }): number {
+  const minSize = Math.max(opts.minSizeBytes, 1);
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS total FROM (
+         SELECT sha256 FROM files
+         WHERE state = 'indexed' AND size_bytes >= ?
+         GROUP BY sha256
+         HAVING COUNT(*) > 1
+       )`,
+    )
+    .get(minSize) as { total: number };
+  return row.total;
 }
