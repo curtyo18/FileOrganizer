@@ -1,6 +1,7 @@
 import type { Catalog } from '../catalog/connection.js';
 import { FilesRepo } from '../catalog/files-repo.js';
 import { ScansRepo } from '../catalog/scans-repo.js';
+import { EmptyDirsRepo } from '../catalog/empty-dirs-repo.js';
 import { walk } from './walker.js';
 import { hashFile } from './hasher.js';
 import { extractImageMetadata } from './metadata-image.js';
@@ -40,6 +41,7 @@ export interface RunScanResult {
 export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
   const filesRepo = new FilesRepo(opts.db);
   const scansRepo = new ScansRepo(opts.db);
+  const emptyDirsRepo = new EmptyDirsRepo(opts.db);
   const scan = scansRepo.start({
     driveId: opts.driveId,
     rootPaths: opts.roots,
@@ -69,6 +71,8 @@ export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
       extensions: allowedExtensions,
       excluded: DEFAULT_EXCLUDED_NAMES,
       extraExcluded: opts.extraExcluded ?? [],
+      onEmptyDir: (path) =>
+        emptyDirsRepo.upsert(opts.driveId, path, scan.id, new Date().toISOString()),
     };
     if (opts.signal) walkOpts.signal = opts.signal;
     const walker = walk(walkOpts);
@@ -173,6 +177,11 @@ export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
 
     if (!cancelled) {
       filesRepo.markMissing(opts.driveId, scan.id, opts.roots);
+      // Drop empty_dirs rows from prior scans that this walk didn't
+      // re-confirm. Skipped on cancel: a partial walk would otherwise wipe
+      // the prior scan's correct state, and removeEmptyDirs re-checks each
+      // path with readdir before deleting anyway.
+      emptyDirsRepo.pruneStale(opts.driveId, scan.id);
     }
     scansRepo.updateProgress(scan.id, {
       lastCompletedDirectory: lastDir,

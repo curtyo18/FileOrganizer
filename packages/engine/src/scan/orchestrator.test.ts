@@ -128,6 +128,104 @@ describe('runScan', () => {
     expect(scan!.status).toBe('cancelled');
   });
 
+  it('persists empty-dir state to the catalog after a successful scan', async () => {
+    fixture('keeper/sub/inside.jpg', 'keep');
+    fixture('non-matching/a.tmp', 'tmp');
+    // fully empty branch
+    mkdirSync(join(scanRoot, 'fully-empty', 'deep'), { recursive: true });
+    // sibling of keeper that's empty
+    mkdirSync(join(scanRoot, 'keeper', 'empty-sibling'), { recursive: true });
+    const writes: string[] = [];
+    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
+    await runScan({
+      db, driveId, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
+      throttle, log, mediainfoPath: '/no/such',
+    });
+    const rows = db
+      .prepare(`SELECT path FROM empty_dirs WHERE drive_id = ? ORDER BY path`)
+      .all(driveId) as { path: string }[];
+    const paths = new Set(rows.map((r) => r.path));
+    expect(paths.has(join(scanRoot, 'fully-empty', 'deep'))).toBe(true);
+    expect(paths.has(join(scanRoot, 'fully-empty'))).toBe(true);
+    expect(paths.has(join(scanRoot, 'keeper', 'empty-sibling'))).toBe(true);
+    expect(paths.has(join(scanRoot, 'non-matching'))).toBe(true);
+    // dirs holding indexed files are not stored
+    expect(paths.has(join(scanRoot, 'keeper'))).toBe(false);
+    expect(paths.has(join(scanRoot, 'keeper', 'sub'))).toBe(false);
+    // root itself is never reported
+    expect(paths.has(scanRoot)).toBe(false);
+  });
+
+  it('prunes stale empty-dir rows on the second scan', async () => {
+    mkdirSync(join(scanRoot, 'gone'), { recursive: true });
+    mkdirSync(join(scanRoot, 'becomes-occupied'), { recursive: true });
+    mkdirSync(join(scanRoot, 'still-empty'), { recursive: true });
+    const writes: string[] = [];
+    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
+    const baseOpts = {
+      db, driveId, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
+      throttle, log, mediainfoPath: '/no/such',
+    };
+    await runScan(baseOpts);
+    let paths = (db
+      .prepare(`SELECT path FROM empty_dirs WHERE drive_id = ?`)
+      .all(driveId) as { path: string }[]).map((r) => r.path);
+    expect(paths).toEqual(
+      expect.arrayContaining([
+        join(scanRoot, 'gone'),
+        join(scanRoot, 'becomes-occupied'),
+        join(scanRoot, 'still-empty'),
+      ]),
+    );
+
+    rmSync(join(scanRoot, 'gone'), { recursive: true, force: true });
+    fixture('becomes-occupied/file.jpg', 'data');
+
+    await runScan(baseOpts);
+    paths = (db
+      .prepare(`SELECT path FROM empty_dirs WHERE drive_id = ?`)
+      .all(driveId) as { path: string }[]).map((r) => r.path);
+    expect(paths).toContain(join(scanRoot, 'still-empty'));
+    expect(paths).not.toContain(join(scanRoot, 'gone'));
+    expect(paths).not.toContain(join(scanRoot, 'becomes-occupied'));
+  });
+
+  it('does not prune empty-dir rows when the scan is cancelled', async () => {
+    mkdirSync(join(scanRoot, 'pre-existing'), { recursive: true });
+    const writes: string[] = [];
+    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
+    await runScan({
+      db, driveId, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
+      throttle, log, mediainfoPath: '/no/such',
+    });
+    const before = (db
+      .prepare(`SELECT path FROM empty_dirs WHERE drive_id = ?`)
+      .all(driveId) as { path: string }[]).map((r) => r.path);
+    expect(before).toContain(join(scanRoot, 'pre-existing'));
+
+    for (let i = 0; i < 1000; i += 1) {
+      fixture(`f${String(i).padStart(4, '0')}.jpg`, `payload-${i}`.repeat(50));
+    }
+    const controller = new AbortController();
+    const promise = runScan({
+      db, driveId, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
+      throttle, log, mediainfoPath: '/no/such',
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 50);
+    const result = await promise;
+    expect(result.cancelled).toBe(true);
+
+    const after = (db
+      .prepare(`SELECT path FROM empty_dirs WHERE drive_id = ?`)
+      .all(driveId) as { path: string }[]).map((r) => r.path);
+    // Cancelled scans must not prune — pre-existing row stays.
+    expect(after).toContain(join(scanRoot, 'pre-existing'));
+  });
+
   it('persists a scans row with completed status', async () => {
     fixture('a.jpg', 'aaa');
     const writes: string[] = [];
