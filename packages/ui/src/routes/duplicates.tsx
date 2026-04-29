@@ -1,16 +1,27 @@
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import type { RoutableProps } from 'preact-router';
 import type { DriveRecord } from '@fileorganizer/shared';
 import {
   defaultApiClient,
-  type DedupePlanResponse,
-  type DuplicateGroupUI,
-  type DuplicateCopyUI,
   type DedupeOperation,
+  type DuplicateCopyUI,
+  type DuplicateGroupUI,
 } from '../api/client.js';
 import { Icon } from '../components/icon.js';
 import { DriveRootsPrompt } from '../components/drive-roots-prompt.js';
 import { formatBytes, driveColor, driveLetter } from '../lib/format.js';
+
+const PAGE_SIZE = 50;
+
+const MIN_SIZE_OPTIONS: { label: string; bytes: number }[] = [
+  { label: '1 KB', bytes: 1024 },
+  { label: '1 MB', bytes: 1024 * 1024 },
+  { label: '10 MB', bytes: 10 * 1024 * 1024 },
+  { label: '100 MB', bytes: 100 * 1024 * 1024 },
+  { label: '1 GB', bytes: 1024 * 1024 * 1024 },
+];
+
+const DEFAULT_MIN_SIZE = 1024 * 1024;
 
 function shortHash(h: string): string {
   return h.length > 12 ? h.slice(0, 10) + '…' : h;
@@ -31,61 +42,106 @@ interface DuplicatesProps extends RoutableProps {}
 export function Duplicates(_props: DuplicatesProps) {
   const api = defaultApiClient();
   const [drives, setDrives] = useState<DriveRecord[]>([]);
-  const [plan, setPlan] = useState<DedupePlanResponse | null>(null);
+  const [groups, setGroups] = useState<DuplicateGroupUI[]>([]);
+  const [operations, setOperations] = useState<DedupeOperation[]>([]);
+  const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedHash, setSelectedHash] = useState<string | null>(null);
   const [selectedOps, setSelectedOps] = useState<Set<number>>(new Set());
   const [showRoots, setShowRoots] = useState(false);
   const [filter, setFilter] = useState<'all' | 'image' | 'video' | 'document'>('all');
+  const [minSize, setMinSize] = useState<number>(DEFAULT_MIN_SIZE);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const loadingRef = useRef(false);
+  const initialLoadRef = useRef(false);
 
-  const reload = () => {
-    Promise.all([api.listDrives(), api.listDuplicates({ minSize: 1024 })])
-      .then(([d, p]) => {
-        setDrives(d);
-        setPlan(p);
-        if (!selectedHash && p.groups.length > 0) {
-          setSelectedHash(p.groups[0]!.sha256);
-        }
-        setSelectedOps(new Set(p.operations.map((o) => o.removeFileId)));
-      })
-      .catch((e) => setError((e as Error).message));
+  const loadPage = async (offset: number, reset: boolean) => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    setLoading(true);
+    try {
+      const [d, plan] = await Promise.all([
+        offset === 0 ? api.listDrives() : Promise.resolve(null),
+        api.listDuplicates({ minSize, limit: PAGE_SIZE, offset }),
+      ]);
+      if (d) setDrives(d);
+      if (reset) {
+        setGroups(plan.groups);
+        setOperations(plan.operations);
+        setSelectedOps(new Set(plan.operations.map((o) => o.removeFileId)));
+        setSelectedHash(plan.groups[0]?.sha256 ?? null);
+      } else {
+        setGroups((prev) => [...prev, ...plan.groups]);
+        setOperations((prev) => [...prev, ...plan.operations]);
+        setSelectedOps((prev) => {
+          const next = new Set(prev);
+          for (const op of plan.operations) next.add(op.removeFileId);
+          return next;
+        });
+      }
+      setTotal(plan.total);
+      setHasMore(plan.hasMore);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      loadingRef.current = false;
+      setLoading(false);
+    }
   };
 
-  useEffect(reload, []);
+  useEffect(() => {
+    initialLoadRef.current = true;
+    loadPage(0, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [minSize]);
 
   const driveById = new Map(drives.map((d) => [d.id, d]));
 
-  const groups = (plan?.groups ?? []).filter((g) => filter === 'all' || g.copies[0]?.category === filter);
-  const selectedGroup = groups.find((g) => g.sha256 === selectedHash) ?? groups[0];
+  const visibleGroups = groups.filter(
+    (g) => filter === 'all' || g.copies[0]?.category === filter,
+  );
+  const selectedGroup =
+    visibleGroups.find((g) => g.sha256 === selectedHash) ?? visibleGroups[0];
 
-  const totalReclaim = (plan?.operations ?? [])
+  const totalReclaim = operations
     .filter((o) => selectedOps.has(o.removeFileId))
     .reduce((sum, o) => sum + o.reclaimableBytes, 0);
 
   const involvedDrives = (() => {
-    if (!plan) return [];
     const ids = new Set<string>();
-    for (const op of plan.operations) {
+    const copyById = new Map<number, DuplicateCopyUI>();
+    for (const g of groups) for (const c of g.copies) copyById.set(c.fileId, c);
+    for (const op of operations) {
       if (selectedOps.has(op.removeFileId)) {
-        const file = plan.groups.flatMap((g) => g.copies).find((c) => c.fileId === op.removeFileId);
+        const file = copyById.get(op.removeFileId);
         if (file) ids.add(file.driveId);
       }
     }
     return [...ids];
   })();
 
+  const onScroll = (e: Event) => {
+    const el = e.currentTarget as HTMLDivElement;
+    if (!hasMore || loadingRef.current) return;
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (dist < 240) {
+      void loadPage(groups.length, false);
+    }
+  };
+
   const onApprove = async () => {
-    if (selectedOps.size === 0 || !plan) return;
-    // Drives that don't have a stored mount path need a manual prompt.
+    if (selectedOps.size === 0) return;
     const missingMounts = involvedDrives.filter((id) => !driveById.get(id)?.mountPath);
     if (missingMounts.length > 0) {
       setShowRoots(true);
       return;
     }
     try {
-      const ops = plan.operations.filter((o) => selectedOps.has(o.removeFileId));
+      const ops = operations.filter((o) => selectedOps.has(o.removeFileId));
       await api.applyDedupe({ operations: ops, driveRoots: {} });
-      reload();
+      await loadPage(0, true);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -93,11 +149,10 @@ export function Duplicates(_props: DuplicatesProps) {
 
   const onConfirmRoots = async (roots: Record<string, string>) => {
     setShowRoots(false);
-    if (!plan) return;
     try {
-      const ops = plan.operations.filter((o) => selectedOps.has(o.removeFileId));
+      const ops = operations.filter((o) => selectedOps.has(o.removeFileId));
       await api.applyDedupe({ operations: ops, driveRoots: roots });
-      reload();
+      await loadPage(0, true);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -113,7 +168,7 @@ export function Duplicates(_props: DuplicatesProps) {
     );
   }
 
-  if (!plan) {
+  if (!initialLoadRef.current && loading) {
     return (
       <div style={{ padding: 16, color: 'var(--fg-3)' }}>
         Loading duplicates…
@@ -121,19 +176,21 @@ export function Duplicates(_props: DuplicatesProps) {
     );
   }
 
-  if (plan.groups.length === 0) {
+  if (groups.length === 0 && !loading) {
     return (
       <div style={{ padding: 16, height: '100%', overflowY: 'auto' }}>
         <div class="card">
           <div class="card-hd">
             <Icon name="dupes" />
             <span>Duplicates</span>
+            <div style={{ flex: 1 }} />
+            <MinSizeSelect value={minSize} onChange={setMinSize} />
           </div>
           <div style={{ padding: 24, textAlign: 'center', color: 'var(--fg-2)' }}>
             <Icon name="dupes" size={32} />
-            <div style={{ marginTop: 10, fontSize: 13 }}>No duplicates found.</div>
+            <div style={{ marginTop: 10, fontSize: 13 }}>No duplicates above this size threshold.</div>
             <div style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 4 }}>
-              Either nothing's been scanned yet, or every indexed file is unique.
+              Try lowering the minimum size, or scan more drives.
             </div>
           </div>
         </div>
@@ -141,9 +198,25 @@ export function Duplicates(_props: DuplicatesProps) {
     );
   }
 
+  const totalReclaimableBytes = groups.reduce((s, g) => s + g.reclaimableBytes, 0);
+
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '380px 1fr', height: '100%', minHeight: 0 }}>
-      <div style={{ borderRight: '1px solid var(--line)', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: '380px 1fr',
+        height: '100%',
+        minHeight: 0,
+      }}
+    >
+      <div
+        style={{
+          borderRight: '1px solid var(--line)',
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: 0,
+        }}
+      >
         <div
           style={{
             padding: '10px 14px',
@@ -154,11 +227,12 @@ export function Duplicates(_props: DuplicatesProps) {
           }}
         >
           <Icon name="dupes" />
-          <span style={{ fontWeight: 600 }}>{plan.groups.length} groups</span>
-          <span class="pill warn">
-            {formatBytes(plan.groups.reduce((s, g) => s + g.reclaimableBytes, 0))}
+          <span style={{ fontWeight: 600 }}>
+            {groups.length} of {total} groups
           </span>
+          <span class="pill warn">{formatBytes(totalReclaimableBytes)}</span>
           <div style={{ flex: 1 }} />
+          <MinSizeSelect value={minSize} onChange={setMinSize} />
         </div>
         <div
           style={{
@@ -187,14 +261,20 @@ export function Duplicates(_props: DuplicatesProps) {
           <div style={{ flex: 1 }} />
           <span style={{ color: 'var(--fg-3)' }}>sort: reclaim ↓</span>
         </div>
-        <div style={{ flex: 1, overflowY: 'auto' }}>
-          {groups.map((g) => {
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          style={{ flex: 1, overflowY: 'auto' }}
+        >
+          {visibleGroups.map((g) => {
             const cat = g.copies[0]?.category ?? 'file';
             const driveLetters = [
               ...new Set(
                 g.copies.map((c) => {
                   const d = driveById.get(c.driveId);
-                  return d ? driveLetter(d.currentLetter, d.label.charAt(0).toUpperCase()) : '?';
+                  return d
+                    ? driveLetter(d.currentLetter, d.label.charAt(0).toUpperCase())
+                    : '?';
                 }),
               ),
             ];
@@ -211,11 +291,20 @@ export function Duplicates(_props: DuplicatesProps) {
                   borderLeft: isSel ? '2px solid var(--accent)' : '2px solid transparent',
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    marginBottom: 4,
+                  }}
+                >
                   <span class="mono" style={{ color: 'var(--fg-2)', fontSize: 10 }}>
                     {shortHash(g.sha256)}
                   </span>
-                  <span class="pill" style={{ fontSize: 9.5 }}>{cat}</span>
+                  <span class="pill" style={{ fontSize: 9.5 }}>
+                    {cat}
+                  </span>
                   <div style={{ flex: 1 }} />
                   <span
                     class="mono tnum"
@@ -251,7 +340,9 @@ export function Duplicates(_props: DuplicatesProps) {
                   <div style={{ display: 'flex', gap: 2 }}>
                     {driveLetters.map((dr, i) => {
                       const driveRec = drives.find(
-                        (d) => driveLetter(d.currentLetter, d.label.charAt(0).toUpperCase()) === dr,
+                        (d) =>
+                          driveLetter(d.currentLetter, d.label.charAt(0).toUpperCase()) ===
+                          dr,
                       );
                       return (
                         <span
@@ -279,13 +370,36 @@ export function Duplicates(_props: DuplicatesProps) {
               </div>
             );
           })}
+          {hasMore ? (
+            <div
+              style={{
+                padding: 14,
+                textAlign: 'center',
+                color: 'var(--fg-3)',
+                fontSize: 11,
+              }}
+            >
+              {loading ? 'Loading more…' : 'Scroll to load more'}
+            </div>
+          ) : groups.length > 0 ? (
+            <div
+              style={{
+                padding: 14,
+                textAlign: 'center',
+                color: 'var(--fg-3)',
+                fontSize: 11,
+              }}
+            >
+              All {total} groups loaded.
+            </div>
+          ) : null}
         </div>
       </div>
 
       {selectedGroup ? (
         <DupDetail
           group={selectedGroup}
-          plan={plan}
+          operations={operations}
           drives={drives}
           selectedOps={selectedOps}
           onToggle={(fileId, want) => {
@@ -312,9 +426,43 @@ export function Duplicates(_props: DuplicatesProps) {
   );
 }
 
+interface MinSizeSelectProps {
+  value: number;
+  onChange: (bytes: number) => void;
+}
+
+function MinSizeSelect({ value, onChange }: MinSizeSelectProps) {
+  return (
+    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+      <span style={{ color: 'var(--fg-2)' }}>min size</span>
+      <select
+        value={String(value)}
+        onChange={(e) =>
+          onChange(parseInt((e.currentTarget as HTMLSelectElement).value, 10))
+        }
+        style={{
+          background: 'var(--bg-2)',
+          color: 'var(--fg-0)',
+          border: '1px solid var(--line)',
+          borderRadius: 3,
+          padding: '2px 6px',
+          fontSize: 11,
+          fontFamily: 'inherit',
+        }}
+      >
+        {MIN_SIZE_OPTIONS.map((o) => (
+          <option key={o.bytes} value={String(o.bytes)}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 interface DupDetailProps {
   group: DuplicateGroupUI;
-  plan: DedupePlanResponse;
+  operations: DedupeOperation[];
   drives: DriveRecord[];
   selectedOps: Set<number>;
   onToggle: (fileId: number, want: boolean) => void;
@@ -324,7 +472,7 @@ interface DupDetailProps {
 
 function DupDetail({
   group,
-  plan,
+  operations,
   drives,
   selectedOps,
   onToggle,
@@ -332,11 +480,12 @@ function DupDetail({
   onApprove,
 }: DupDetailProps) {
   const driveById = new Map(drives.map((d) => [d.id, d]));
-  const opsForGroup = plan.operations.filter((o) => o.groupSha256 === group.sha256);
+  const opsForGroup = operations.filter((o) => o.groupSha256 === group.sha256);
   const keeperOp = opsForGroup[0];
   const keeperId = keeperOp?.keeperFileId ?? null;
   const reasons = keeperOp?.reasons ?? [];
-  const groupSelectedCount = opsForGroup.filter((o) => selectedOps.has(o.removeFileId)).length;
+  const groupSelectedCount = opsForGroup.filter((o) => selectedOps.has(o.removeFileId))
+    .length;
   const cat = group.copies[0]?.category ?? 'file';
 
   return (
@@ -356,15 +505,14 @@ function DupDetail({
           </div>
           <div style={{ fontSize: 11, color: 'var(--fg-2)', marginTop: 2 }}>
             {group.copies.length} byte-identical copies · {formatBytes(group.fileSizeBytes)} each ·
-            reclaim <span style={{ color: 'var(--accent)' }}>{formatBytes(group.reclaimableBytes)}</span>
+            reclaim{' '}
+            <span style={{ color: 'var(--accent)' }}>
+              {formatBytes(group.reclaimableBytes)}
+            </span>
           </div>
         </div>
         <div style={{ flex: 1 }} />
-        <button
-          class="btn primary sm"
-          disabled={groupSelectedCount === 0}
-          onClick={onApprove}
-        >
+        <button class="btn primary sm" disabled={groupSelectedCount === 0} onClick={onApprove}>
           approve · quarantine {groupSelectedCount}
         </button>
       </div>
@@ -425,9 +573,13 @@ function DupDetail({
                 </div>
                 <div style={{ padding: 10 }}>
                   {isKeeper ? (
-                    <span class="pill ok" style={{ marginBottom: 6 }}>✓ keeper</span>
+                    <span class="pill ok" style={{ marginBottom: 6 }}>
+                      ✓ keeper
+                    </span>
                   ) : (
-                    <span class="pill" style={{ marginBottom: 6 }}>candidate</span>
+                    <span class="pill" style={{ marginBottom: 6 }}>
+                      candidate
+                    </span>
                   )}
                   <div
                     style={{
@@ -540,7 +692,9 @@ function DupDetail({
                         <input
                           type="checkbox"
                           checked={selectedOps.has(c.fileId)}
-                          onChange={(e) => onToggle(c.fileId, (e.target as HTMLInputElement).checked)}
+                          onChange={(e) =>
+                            onToggle(c.fileId, (e.target as HTMLInputElement).checked)
+                          }
                         />
                       ) : null}
                     </td>
@@ -570,10 +724,7 @@ function DupDetail({
                       {c.mtime.slice(0, 10)}
                     </td>
                     <td>
-                      <span
-                        class={`pill ${isKeeper ? 'ok' : ''}`}
-                        style={{ fontSize: 9.5 }}
-                      >
+                      <span class={`pill ${isKeeper ? 'ok' : ''}`} style={{ fontSize: 9.5 }}>
                         {isKeeper ? 'keep' : '→ quarantine'}
                       </span>
                     </td>
