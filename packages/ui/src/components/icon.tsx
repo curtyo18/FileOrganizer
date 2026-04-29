@@ -6,7 +6,6 @@ interface IconProps {
 const PATHS: Record<string, string> = {
   drive: 'M2 4h12v8H2zM4 12v2M12 12v2',
   folder: 'M2 4h4l1 1h7v8H2z',
-  search: 'M7 12a5 5 0 100-10 5 5 0 000 10zM14 14l-3.5-3.5',
   scan: 'M2 5V2h3M14 5V2h-3M2 11v3h3M14 11v3h-3M5 8h6',
   rules: 'M3 3h10M3 8h10M3 13h6',
   dupes: 'M5 5h7v7H5zM3 3h7v2M3 3v7h2',

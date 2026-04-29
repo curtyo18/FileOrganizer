@@ -125,28 +125,6 @@ export function Sidebar(props: SidebarProps) {
         </div>
       </div>
 
-      <div style={{ padding: '0 8px 8px' }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            padding: '5px 8px',
-            background: 'var(--bg-2)',
-            border: '1px solid var(--line)',
-            borderRadius: 4,
-            color: 'var(--fg-2)',
-            fontSize: 11.5,
-            cursor: 'text',
-          }}
-          title="Search (coming soon)"
-        >
-          <Icon name="search" size={12} />
-          <span>Search…</span>
-          <span style={{ marginLeft: 'auto' }} class="kbd">/</span>
-        </div>
-      </div>
-
       <nav style={{ flex: 1, overflowY: 'auto', padding: '0 8px' }}>
         {items.map((it, i) =>
           it === null ? (

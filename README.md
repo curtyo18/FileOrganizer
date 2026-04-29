@@ -113,8 +113,6 @@ Inside the UI:
   priority + overflow.
 - **Throttle** (`gt`) — switch profiles (idle / balanced / full-send) or
   schedule them by hour.
-- Press **/** anywhere to focus the search box. Hold no modifier — `Ctrl+G`
-  still works as the browser's find-next.
 
 ## CLI (optional)
 

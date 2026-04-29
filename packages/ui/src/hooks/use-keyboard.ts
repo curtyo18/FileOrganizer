@@ -60,9 +60,5 @@ export function defaultShortcuts(): ShortcutMap {
     gq: () => route('/quarantine'),
     gr: () => route('/roles'),
     gt: () => route('/throttle'),
-    '/': () => {
-      const el = document.querySelector<HTMLInputElement>('input[type="search"]');
-      el?.focus();
-    },
   };
 }

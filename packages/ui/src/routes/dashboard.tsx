@@ -189,35 +189,10 @@ function ActivityFeed({ scans, drives }: { scans: ScanRecord[]; drives: DriveRec
   );
 }
 
-function CategoryBreakdown({ totalFiles, totalBytes }: { totalFiles: number; totalBytes: number }) {
-  return (
-    <div class="card">
-      <div class="card-hd">
-        <Icon name="rules" />
-        <span>Library by category</span>
-        <span class="pill">
-          {formatNum(totalFiles)} files · {formatBytes(totalBytes)}
-        </span>
-        <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 10, color: 'var(--fg-3)' }}>category breakdown coming in M5</span>
-      </div>
-      <div style={{ padding: 14 }}>
-        <div class="seg-bar" style={{ marginBottom: 12, opacity: 0.4 }}>
-          <span style={{ width: '100%', background: 'var(--bg-3)' }} />
-        </div>
-        <div style={{ fontSize: 11, color: 'var(--fg-3)' }}>
-          Run a scan first; once per-category aggregates are computed they'll appear here.
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function Dashboard(_props: RoutableProps) {
   const api = defaultApiClient();
   const [drives, setDrives] = useState<DriveRecord[]>([]);
   const [scans, setScans] = useState<ScanRecord[]>([]);
-  const [fileSummary, setFileSummary] = useState<{ count: number; bytes: number }>({ count: 0, bytes: 0 });
 
   const reload = () => {
     api.listDrives().then(setDrives).catch(() => {});
@@ -229,12 +204,6 @@ export function Dashboard(_props: RoutableProps) {
     const interval = window.setInterval(reload, 3000);
     return () => clearInterval(interval);
   }, []);
-
-  // Approximate library size from drive used totals (placeholder until we have a /api/summary).
-  useEffect(() => {
-    const bytes = drives.reduce((acc, d) => acc + Math.max(0, d.totalBytes - d.freeBytes), 0);
-    setFileSummary({ count: 0, bytes });
-  }, [drives]);
 
   return (
     <div
@@ -251,14 +220,14 @@ export function Dashboard(_props: RoutableProps) {
         <ActionCard
           kind="muted"
           title="Duplicates"
-          sub="dedup ships in M4"
+          sub="byte-identical groups across drives"
           cta="Open"
           href="/duplicates"
         />
         <ActionCard
           kind="muted"
           title="Organize plan"
-          sub="rules ship in M5"
+          sub="plan, dry-run, apply rule moves"
           cta="Open"
           href="/organize"
         />
@@ -307,8 +276,6 @@ export function Dashboard(_props: RoutableProps) {
         </div>
         <ActivityFeed scans={scans} drives={drives} />
       </div>
-
-      <CategoryBreakdown totalFiles={fileSummary.count} totalBytes={fileSummary.bytes} />
     </div>
   );
 }
