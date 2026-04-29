@@ -514,6 +514,87 @@ describe('plan + apply + undo endpoints', () => {
     expect(Array.isArray(body.unresolvedRoles)).toBe(true);
   });
 
+  it('paginates /api/plan/organize via limit/offset and exposes total + hasMore', async () => {
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    const dataDir = join(dir, 'paginate-photos');
+    mkdirSync(dataDir, { recursive: true });
+    // 8 distinct files so 5 fits on page 0 and 3 spills onto page 1.
+    for (let i = 0; i < 8; i += 1) {
+      writeFileSync(join(dataDir, `f${i}.jpg`), `payload-${i}`);
+    }
+    const scanRes = await fetch(`http://127.0.0.1:${handle.port}/api/scans`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rootPath: dataDir, profile: 'idle' }),
+    });
+    expect(scanRes.status).toBe(201);
+    const { scan } = (await scanRes.json()) as { scan: { id: string; driveId: string } };
+    const driveId = scan.driveId;
+    for (let i = 0; i < 50; i += 1) {
+      const got = await fetch(`http://127.0.0.1:${handle.port}/api/scans/${scan.id}`);
+      const body = (await got.json()) as { scan: { status: string } };
+      if (body.scan.status === 'completed') break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    await fetch(`http://127.0.0.1:${handle.port}/api/rules`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'photos paginated',
+        priority: 100,
+        match: { category: ['image'] },
+        destinationRole: 'photos',
+        destinationTemplate: 'Photos/{filename}',
+        movePolicy: 'always-review',
+        quarantinePolicy: 'default',
+      }),
+    });
+    await fetch(`http://127.0.0.1:${handle.port}/api/roles`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'photos',
+        drivePriority: [driveId],
+        fillThresholdPercent: 99,
+      }),
+    });
+
+    const page0Res = await fetch(`http://127.0.0.1:${handle.port}/api/plan/organize`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ driveRoots: { [driveId]: dataDir }, limit: 5, offset: 0 }),
+    });
+    expect(page0Res.status).toBe(200);
+    const page0 = (await page0Res.json()) as {
+      operations: unknown[];
+      total: number;
+      hasMore: boolean;
+      unresolvedRoles: unknown[];
+      ruleStats: unknown[];
+    };
+    expect(page0.total).toBe(8);
+    expect(page0.hasMore).toBe(true);
+    expect(Array.isArray(page0.operations)).toBe(true);
+    expect(page0.operations.length).toBeLessThanOrEqual(5);
+    expect(Array.isArray(page0.unresolvedRoles)).toBe(true);
+    expect(Array.isArray(page0.ruleStats)).toBe(true);
+
+    const page1Res = await fetch(`http://127.0.0.1:${handle.port}/api/plan/organize`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ driveRoots: { [driveId]: dataDir }, limit: 5, offset: 5 }),
+    });
+    const page1 = (await page1Res.json()) as {
+      operations: unknown[];
+      total: number;
+      hasMore: boolean;
+    };
+    expect(page1.total).toBe(8);
+    expect(page1.hasMore).toBe(false);
+    expect(page1.operations.length).toBe(3);
+  });
+
   it('returns 503 when a cross-drive apply hits a DriveError (disconnected drive)', async () => {
     const { mkdirSync, writeFileSync, rmSync } = await import('node:fs');
     const sourceRoot = join(dir, 'src-root');

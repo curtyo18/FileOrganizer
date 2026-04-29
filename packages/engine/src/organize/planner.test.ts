@@ -358,6 +358,91 @@ describe('planOrganize', () => {
     expect(plan.operations[0]!.destDriveId).toBe(archiveDriveId);
   });
 
+  it('paginates operations by estimatedBytes desc with stable tie-break', () => {
+    const driveId = seedDrive('PRIMARY');
+    new RulesRepo(db).create({
+      name: 'photos',
+      priority: 100,
+      match: { category: ['image'] },
+      destinationRole: 'photos',
+      destinationTemplate: 'Photos/{filename}',
+      movePolicy: 'same-drive-auto',
+      quarantinePolicy: 'default',
+    });
+    const root = resolve(dir, 'PRIMARY');
+    // 12 files, sizes deliberately interleaved so a stable sort by bytes
+    // desc + tie-break on (ruleId, fileId) is observable.
+    const sizes = [10, 50, 30, 50, 20, 50, 40, 10, 30, 60, 70, 80];
+    sizes.forEach((sz, i) => {
+      seedFile({
+        driveId,
+        path: resolve(root, `f${i}.jpg`),
+        name: `f${i}.jpg`,
+        sizeBytes: sz,
+      });
+    });
+
+    const driveRoots = new Map([[driveId, root]]);
+    const roles = [role('photos', [driveId])];
+
+    const page0 = planOrganize({ db, driveRoots, roles, limit: 5, offset: 0 });
+    expect(page0.total).toBe(12);
+    expect(page0.hasMore).toBe(true);
+    expect(page0.operations).toHaveLength(5);
+    // Sorted by estimatedBytes desc.
+    const bytes0 = page0.operations.map((o) => o.estimatedBytes);
+    expect(bytes0).toEqual([...bytes0].sort((a, b) => b - a));
+    // First op is the largest (80).
+    expect(page0.operations[0]!.estimatedBytes).toBe(80);
+
+    const page1 = planOrganize({ db, driveRoots, roles, limit: 5, offset: 5 });
+    expect(page1.total).toBe(12);
+    expect(page1.hasMore).toBe(true);
+    expect(page1.operations).toHaveLength(5);
+
+    const page2 = planOrganize({ db, driveRoots, roles, limit: 5, offset: 10 });
+    expect(page2.total).toBe(12);
+    expect(page2.hasMore).toBe(false);
+    expect(page2.operations).toHaveLength(2);
+
+    // No overlap and no gaps between pages.
+    const ids = [
+      ...page0.operations.map((o) => o.fileId),
+      ...page1.operations.map((o) => o.fileId),
+      ...page2.operations.map((o) => o.fileId),
+    ];
+    expect(new Set(ids).size).toBe(12);
+
+    // Aggregates are not paginated — they describe the full plan.
+    expect(page0.unresolvedRoles).toEqual(page2.unresolvedRoles);
+    expect(page0.ruleStats).toEqual(page2.ruleStats);
+    expect(page0.unmatched).toEqual(page2.unmatched);
+  });
+
+  it('returns full operations array and total/hasMore when no pagination is supplied', () => {
+    const driveId = seedDrive('PRIMARY');
+    new RulesRepo(db).create({
+      name: 'photos',
+      priority: 100,
+      match: { category: ['image'] },
+      destinationRole: 'photos',
+      destinationTemplate: 'Photos/{filename}',
+      movePolicy: 'same-drive-auto',
+      quarantinePolicy: 'default',
+    });
+    const root = resolve(dir, 'PRIMARY');
+    seedFile({ driveId, path: resolve(root, 'a.jpg'), name: 'a.jpg' });
+
+    const plan = planOrganize({
+      db,
+      driveRoots: new Map([[driveId, root]]),
+      roles: [role('photos', [driveId])],
+    });
+    expect(plan.operations).toHaveLength(1);
+    expect(plan.total).toBe(1);
+    expect(plan.hasMore).toBe(false);
+  });
+
   it('reports unresolvedRoles when the rule references a role that is not defined', () => {
     const driveId = seedDrive('PRIMARY');
     new RulesRepo(db).create({

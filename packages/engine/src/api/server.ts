@@ -439,10 +439,18 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   app.post('/api/plan/organize', async (c) => {
     const body = (await c.req.json()) as {
       driveRoots?: Record<string, string>;
+      limit?: number;
+      offset?: number;
     };
+    const rawLimit = typeof body.limit === 'number' && Number.isFinite(body.limit) ? body.limit : 200;
+    const limit = Math.min(Math.max(rawLimit, 1), 1000);
+    const rawOffset = typeof body.offset === 'number' && Number.isFinite(body.offset) ? body.offset : 0;
+    const offset = Math.max(rawOffset, 0);
     const plan = planOrganize({
       db: opts.db,
       driveRoots: mergeDriveRoots(drives, body.driveRoots ?? {}),
+      limit,
+      offset,
     });
     return c.json(plan);
   });

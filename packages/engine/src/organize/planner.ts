@@ -42,12 +42,19 @@ export interface OrganizePlan {
   unmatched: number[];
   unresolvedRoles: UnresolvedRole[];
   ruleStats: RuleStat[];
+  total: number;
+  hasMore: boolean;
 }
 
 export interface PlanInput {
   db: Catalog;
   driveRoots: Map<string, string>;
   roles?: RoleDefinition[];
+  // Pagination is opt-in. When neither limit nor offset is supplied the
+  // full operations array is returned (back-compat for non-HTTP callers).
+  // The HTTP layer always supplies a bounded limit.
+  limit?: number;
+  offset?: number;
 }
 
 export function planOrganize(input: PlanInput): OrganizePlan {
@@ -142,11 +149,29 @@ export function planOrganize(input: PlanInput): OrganizePlan {
     actualMatch: actualMatchCounts.get(r.id) ?? 0,
   }));
 
+  // Sort by estimatedBytes desc so the biggest reclaimable moves surface
+  // first. Ties broken by ruleId then fileId so prev/next pages are
+  // deterministic across requests.
+  operations.sort((a, b) => {
+    if (a.estimatedBytes !== b.estimatedBytes) return b.estimatedBytes - a.estimatedBytes;
+    if (a.ruleId !== b.ruleId) return a.ruleId < b.ruleId ? -1 : 1;
+    return a.fileId - b.fileId;
+  });
+
+  const total = operations.length;
+  const paginated = input.limit != null || input.offset != null;
+  const offset = Math.max(input.offset ?? 0, 0);
+  const limit = paginated ? Math.max(input.limit ?? total, 0) : total;
+  const page = paginated ? operations.slice(offset, offset + limit) : operations;
+  const hasMore = paginated ? offset + page.length < total : false;
+
   return {
-    operations,
+    operations: page,
     unmatched,
     unresolvedRoles: [...unresolvedByRule.values()],
     ruleStats,
+    total,
+    hasMore,
   };
 }
 

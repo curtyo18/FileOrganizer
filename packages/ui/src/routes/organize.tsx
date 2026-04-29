@@ -30,6 +30,8 @@ export function Organize(_props: RoutableProps) {
   const [showRoots, setShowRoots] = useState<null | 'plan' | 'apply' | 'dryrun'>(null);
   const [busy, setBusy] = useState(false);
   const [removeEmptySourceDirs, setRemoveEmptySourceDirs] = useState(false);
+  const [pageOffset, setPageOffset] = useState(0);
+  const PAGE_SIZE = 200;
 
   const reload = () => {
     setError(null);
@@ -78,13 +80,15 @@ export function Organize(_props: RoutableProps) {
     }
   };
 
-  const runPlan = async (overrides: Record<string, string>) => {
+  const runPlan = async (overrides: Record<string, string>, offset = 0) => {
     setBusy(true);
     try {
       const merged = { ...driveRootsFromCatalog, ...overrides };
       setPlanRoots(merged);
-      const result = await api.planOrganize(merged);
+      const result = await api.planOrganize(merged, { limit: PAGE_SIZE, offset });
       setPlan(result);
+      setPageOffset(offset);
+      // Per-page selection only — bulk selection across pages is a follow-up.
       setSelected(
         new Set(
           result.operations
@@ -98,6 +102,11 @@ export function Organize(_props: RoutableProps) {
     } finally {
       setBusy(false);
     }
+  };
+
+  const goToPage = (offset: number) => {
+    if (busy) return;
+    runPlan(planRoots, offset);
   };
 
   const onApplyClicked = (kind: 'apply' | 'dryrun') => {
@@ -172,7 +181,7 @@ export function Organize(_props: RoutableProps) {
               class={`btn ${tab === 'plan' ? 'primary' : 'ghost'} sm`}
               onClick={() => setTab('plan')}
             >
-              Plan {plan ? `(${plan.operations.length})` : ''}
+              Plan {plan ? `(${plan.total})` : ''}
             </button>
           </div>
         </div>
@@ -224,6 +233,9 @@ export function Organize(_props: RoutableProps) {
           busy={busy}
           removeEmptySourceDirs={removeEmptySourceDirs}
           setRemoveEmptySourceDirs={setRemoveEmptySourceDirs}
+          pageOffset={pageOffset}
+          pageSize={PAGE_SIZE}
+          onPageChange={goToPage}
         />
       )}
 
@@ -358,6 +370,9 @@ interface PlanPanelProps {
   busy: boolean;
   removeEmptySourceDirs: boolean;
   setRemoveEmptySourceDirs: (v: boolean) => void;
+  pageOffset: number;
+  pageSize: number;
+  onPageChange: (offset: number) => void;
 }
 
 function PlanPanel({
@@ -372,6 +387,9 @@ function PlanPanel({
   busy,
   removeEmptySourceDirs,
   setRemoveEmptySourceDirs,
+  pageOffset,
+  pageSize,
+  onPageChange,
 }: PlanPanelProps) {
   if (!plan) {
     return (
@@ -411,12 +429,20 @@ function PlanPanel({
     else setSelected(new Set(movableOps.map((o) => o.fileId)));
   };
 
+  const totalPages = Math.max(1, Math.ceil(plan.total / pageSize));
+  const currentPage = Math.floor(pageOffset / pageSize) + 1;
+  const canPrev = !busy && pageOffset > 0;
+  const canNext = !busy && plan.hasMore;
+
   return (
     <div class="card">
       <div class="card-hd">
         <span>Plan</span>
         <span class="pill info">
-          {plan.operations.length} ops · {plan.unmatched.length} unmatched
+          {plan.total} ops · {plan.unmatched.length} unmatched
+        </span>
+        <span class="pill" title="Selected on this page">
+          {selected.size} selected · {formatBytes(totalSelectedBytes)}
         </span>
         {plan.unresolvedRoles.length ? (
           <span class="pill warn">{plan.unresolvedRoles.length} unresolved</span>
@@ -457,6 +483,41 @@ function PlanPanel({
           </button>
         </div>
       </div>
+
+      {plan.total > pageSize ? (
+        <div
+          style={{
+            padding: '6px 12px',
+            borderTop: '1px solid var(--bd)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            fontSize: 11,
+            color: 'var(--fg-2)',
+          }}
+        >
+          <button
+            class="btn ghost sm"
+            onClick={() => onPageChange(Math.max(pageOffset - pageSize, 0))}
+            disabled={!canPrev}
+          >
+            Prev
+          </button>
+          <button
+            class="btn ghost sm"
+            onClick={() => onPageChange(pageOffset + pageSize)}
+            disabled={!canNext}
+          >
+            Next
+          </button>
+          <span class="mono tnum">
+            Page {currentPage} of {totalPages}
+          </span>
+          <span style={{ color: 'var(--fg-3)' }}>
+            (selection resets on page change — apply this page first)
+          </span>
+        </div>
+      ) : null}
 
       {plan.unresolvedRoles.length ? (
         <div style={{ padding: '8px 12px', fontSize: 11, color: 'var(--warn)' }}>

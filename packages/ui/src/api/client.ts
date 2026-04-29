@@ -29,6 +29,8 @@ export interface OrganizePlanResponse {
   unmatched: number[];
   unresolvedRoles: { ruleId: string; reason: string; fileCount: number }[];
   ruleStats: RuleStatUI[];
+  total: number;
+  hasMore: boolean;
 }
 
 export interface ApplyResultUI {
@@ -259,11 +261,18 @@ export class ApiClient {
     if (!res.ok && res.status !== 204) throw new Error(`deleteRule: ${res.status}`);
   }
 
-  async planOrganize(driveRoots: Record<string, string>): Promise<OrganizePlanResponse> {
+  async planOrganize(
+    driveRoots: Record<string, string>,
+    page?: { limit?: number; offset?: number },
+  ): Promise<OrganizePlanResponse> {
     const res = await fetch(`${this.opts.baseUrl}/api/plan/organize`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ driveRoots }),
+      body: JSON.stringify({
+        driveRoots,
+        ...(page?.limit != null ? { limit: page.limit } : {}),
+        ...(page?.offset != null ? { offset: page.offset } : {}),
+      }),
     });
     if (!res.ok) throw new Error(`planOrganize: ${res.status}`);
     return (await res.json()) as OrganizePlanResponse;
