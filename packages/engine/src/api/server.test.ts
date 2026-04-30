@@ -211,6 +211,162 @@ describe('settings endpoints', () => {
   });
 });
 
+describe('exclusions endpoints', () => {
+  async function seedFiles(rows: Array<{ path: string; sha?: string; name?: string }>) {
+    const { DriveRepo } = await import('../drives/repo.js');
+    const { FilesRepo } = await import('../catalog/files-repo.js');
+    const drive = new DriveRepo(db).upsert({
+      volumeSerial: 'EXCL',
+      label: 'EXCL',
+      currentLetter: null,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1,
+      freeBytes: 1,
+    });
+    db.prepare(
+      `INSERT OR IGNORE INTO scans (id, drive_id, started_at, status, throttle_profile)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run('scan-excl', drive.id, new Date().toISOString(), 'completed', 'balanced');
+    const repo = new FilesRepo(db);
+    rows.forEach((r, i) => {
+      repo.upsertOne({
+        driveId: drive.id,
+        path: r.path,
+        name: r.name ?? r.path.split(/[\\/]/).pop()!,
+        extension: 'jpg',
+        sizeBytes: 100,
+        category: 'image',
+        sha256: r.sha ?? `sha-${i}`,
+        mtime: '2024-01-01T00:00:00.000Z',
+        ctime: '2024-01-01T00:00:00.000Z',
+        exifDate: null,
+        dateSource: 'mtime',
+        width: null,
+        height: null,
+        durationSeconds: null,
+        ntfsFileId: null,
+        state: 'indexed',
+        scanId: 'scan-excl',
+      });
+    });
+  }
+
+  it('dry-run reports the count without mutating settings or files', async () => {
+    await seedFiles([
+      { path: 'E:\\Downloads\\a.jpg' },
+      { path: 'E:\\Downloads\\sub\\b.jpg' },
+      { path: 'E:\\photos\\c.jpg' },
+    ]);
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/exclusions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ segment: 'Downloads', dryRun: true }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { wouldRemove: number; userExcluded: string[] };
+    expect(body.wouldRemove).toBe(2);
+    expect(body.userExcluded).toEqual([]);
+    const remaining = db.prepare(`SELECT COUNT(*) AS n FROM files`).get() as { n: number };
+    expect(remaining.n).toBe(3);
+    const settings = await (
+      await fetch(`http://127.0.0.1:${handle.port}/api/settings`)
+    ).json() as { settings: { userExcluded: string[] } };
+    expect(settings.settings.userExcluded).toEqual([]);
+  });
+
+  it('persists segment, prunes matching files, and is idempotent on re-add', async () => {
+    await seedFiles([
+      { path: 'E:\\Downloads\\a.jpg' },
+      { path: 'E:\\Downloads\\sub\\b.jpg' },
+      { path: 'E:\\photos\\c.jpg' },
+    ]);
+    const first = await fetch(`http://127.0.0.1:${handle.port}/api/exclusions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ segment: 'Downloads' }),
+    });
+    expect(first.status).toBe(200);
+    const firstBody = (await first.json()) as { removed: number; userExcluded: string[] };
+    expect(firstBody.removed).toBe(2);
+    expect(firstBody.userExcluded).toEqual(['Downloads']);
+    const remaining = db
+      .prepare(`SELECT path FROM files ORDER BY path`)
+      .all() as { path: string }[];
+    expect(remaining).toEqual([{ path: 'E:\\photos\\c.jpg' }]);
+
+    const second = await fetch(`http://127.0.0.1:${handle.port}/api/exclusions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ segment: 'Downloads' }),
+    });
+    expect(second.status).toBe(200);
+    const secondBody = (await second.json()) as { removed: number; userExcluded: string[] };
+    expect(secondBody.removed).toBe(0);
+    expect(secondBody.userExcluded).toEqual(['Downloads']);
+  });
+
+  it('matches POSIX-style paths after normalizing / to \\', async () => {
+    await seedFiles([{ path: 'D:/foo/Downloads/x.png' }]);
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/exclusions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ segment: 'Downloads' }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { removed: number };
+    expect(body.removed).toBe(1);
+  });
+
+  it('rejects empty/whitespace/separator/colon segments with 400', async () => {
+    for (const segment of ['', '   ', 'foo/bar', 'foo\\bar', 'C:']) {
+      const res = await fetch(`http://127.0.0.1:${handle.port}/api/exclusions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ segment }),
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toMatch(/non-empty folder name/);
+    }
+  });
+
+  it('DELETE /api/exclusions/:segment removes from settings without touching files', async () => {
+    await seedFiles([{ path: 'E:\\photos\\c.jpg' }]);
+    await fetch(`http://127.0.0.1:${handle.port}/api/exclusions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ segment: 'photos' }),
+    });
+    const beforeFiles = db.prepare(`SELECT COUNT(*) AS n FROM files`).get() as { n: number };
+    expect(beforeFiles.n).toBe(0);
+    await seedFiles([{ path: 'E:\\photos\\c.jpg', sha: 'sha-restored' }]);
+    const filesBeforeDelete = db
+      .prepare(`SELECT COUNT(*) AS n FROM files`)
+      .get() as { n: number };
+
+    const del = await fetch(
+      `http://127.0.0.1:${handle.port}/api/exclusions/${encodeURIComponent('photos')}`,
+      { method: 'DELETE' },
+    );
+    expect(del.status).toBe(200);
+    const body = (await del.json()) as { userExcluded: string[] };
+    expect(body.userExcluded).toEqual([]);
+    const filesAfterDelete = db
+      .prepare(`SELECT COUNT(*) AS n FROM files`)
+      .get() as { n: number };
+    expect(filesAfterDelete.n).toBe(filesBeforeDelete.n);
+  });
+
+  it('DELETE /api/exclusions/:segment rejects invalid segments with 400', async () => {
+    const res = await fetch(
+      `http://127.0.0.1:${handle.port}/api/exclusions/${encodeURIComponent('foo/bar')}`,
+      { method: 'DELETE' },
+    );
+    expect(res.status).toBe(400);
+  });
+});
+
 describe('rules endpoints', () => {
   it('round-trips a rule through POST/GET/PUT/DELETE', async () => {
     const base = `http://127.0.0.1:${handle.port}/api/rules`;

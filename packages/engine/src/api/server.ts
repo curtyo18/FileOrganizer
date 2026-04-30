@@ -379,6 +379,60 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     return c.json({ settings: body.settings });
   });
 
+  // Whole-name exclusion match. Wraps the path in `\…\`, normalizes `/`
+  // to `\` so POSIX-stored paths still match, and lowercases both sides
+  // (NTFS is case-insensitive; POSIX is not, but a user-facing whole-name
+  // exclusion that flipped case-sensitive on POSIX would surprise users).
+  const EXCLUSION_MATCH_SQL = `INSTR(LOWER('\\' || REPLACE(path, '/', '\\') || '\\'),
+                                     LOWER('\\' || ? || '\\')) > 0`;
+  const validateExclusionSegment = (raw: unknown): string | null => {
+    const seg = typeof raw === 'string' ? raw.trim() : '';
+    if (!seg || seg.includes('\\') || seg.includes('/') || seg.includes(':')) {
+      return null;
+    }
+    return seg;
+  };
+  const exclusionValidationError =
+    'segment must be a non-empty folder name with no separators or colons';
+
+  app.post('/api/exclusions', async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      segment?: string;
+      dryRun?: boolean;
+    };
+    const seg = validateExclusionSegment(body.segment);
+    if (!seg) return c.json({ error: exclusionValidationError }, 400);
+    const countRow = opts.db
+      .prepare(`SELECT COUNT(*) AS n FROM files WHERE ${EXCLUSION_MATCH_SQL}`)
+      .get(seg) as { n: number };
+    const wouldRemove = countRow.n;
+    if (body.dryRun === true) {
+      return c.json({ wouldRemove, userExcluded: settingsRepo.load().userExcluded });
+    }
+    const current = settingsRepo.load();
+    if (!current.userExcluded.some((x) => x.toLowerCase() === seg.toLowerCase())) {
+      current.userExcluded.push(seg);
+    }
+    const result = opts.db
+      .prepare(`DELETE FROM files WHERE ${EXCLUSION_MATCH_SQL}`)
+      .run(seg);
+    settingsRepo.save(current);
+    opts.onSettingsChanged?.(current);
+    return c.json({ removed: result.changes, userExcluded: current.userExcluded });
+  });
+
+  app.delete('/api/exclusions/:segment', (c) => {
+    const seg = validateExclusionSegment(c.req.param('segment'));
+    if (!seg) return c.json({ error: exclusionValidationError }, 400);
+    const current = settingsRepo.load();
+    current.userExcluded = current.userExcluded.filter(
+      (x) => x.toLowerCase() !== seg.toLowerCase(),
+    );
+    settingsRepo.save(current);
+    opts.onSettingsChanged?.(current);
+    return c.json({ userExcluded: current.userExcluded });
+  });
+
   app.get('/api/roles', (c) => c.json({ roles: roles.list() }));
 
   app.post('/api/roles', async (c) => {
