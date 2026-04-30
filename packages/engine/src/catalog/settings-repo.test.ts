@@ -28,6 +28,26 @@ describe('SettingsRepo', () => {
     expect(s.categoryMap).toEqual(DEFAULT_CATEGORY_MAP);
     expect(s.recentArchiveCutoffYears).toBe(2);
     expect(s.uiPort).toBe(0);
+    expect(s.userExcluded).toEqual([]);
+  });
+
+  it('backfills userExcluded when an older settings row is missing the field', () => {
+    const oldShape = {
+      catalogVersion: 1,
+      categoryMap: DEFAULT_CATEGORY_MAP,
+      throttleProfiles: { idle: { name: 'idle' } },
+      throttleSchedule: [],
+      recentArchiveCutoffYears: 5,
+      uiPort: 9999,
+    };
+    db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`).run(
+      'settings',
+      JSON.stringify(oldShape),
+    );
+    const s = new SettingsRepo(db).load();
+    expect(s.userExcluded).toEqual([]);
+    expect(s.recentArchiveCutoffYears).toBe(5);
+    expect(s.uiPort).toBe(9999);
   });
 
   it('persists changes', () => {

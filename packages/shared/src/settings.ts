@@ -18,6 +18,7 @@ export interface Settings {
   throttleSchedule: ThrottleScheduleEntry[];
   recentArchiveCutoffYears: number;
   uiPort: number;
+  userExcluded: string[];
 }
 
 export const DEFAULT_CATEGORY_MAP: CategoryMap = {

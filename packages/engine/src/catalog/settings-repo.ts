@@ -16,7 +16,8 @@ export class SettingsRepo {
       .prepare(`SELECT value FROM settings WHERE key = ?`)
       .get(KEY) as { value: string } | undefined;
     if (row) {
-      return JSON.parse(row.value) as Settings;
+      const loaded = JSON.parse(row.value) as Partial<Settings>;
+      return { ...this.defaults(), ...loaded };
     }
     const fresh = this.defaults();
     this.save(fresh);
@@ -38,6 +39,7 @@ export class SettingsRepo {
       throttleSchedule: [],
       recentArchiveCutoffYears: 2,
       uiPort: 0,
+      userExcluded: [],
     };
   }
 }

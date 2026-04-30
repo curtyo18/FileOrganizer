@@ -111,6 +111,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       throttle,
       log,
       mediainfoPath,
+      extraExcluded: settings.userExcluded,
       signal: controller.signal,
       onStart: (scanId) => {
         registeredId = scanId;
