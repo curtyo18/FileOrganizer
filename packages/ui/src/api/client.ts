@@ -186,6 +186,48 @@ export class ApiClient {
     return body.settings;
   }
 
+  async previewExclusion(
+    segment: string,
+  ): Promise<{ wouldRemove: number; userExcluded: string[] }> {
+    const res = await fetch(`${this.opts.baseUrl}/api/exclusions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ segment, dryRun: true }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`previewExclusion: ${res.status} ${body}`);
+    }
+    return (await res.json()) as { wouldRemove: number; userExcluded: string[] };
+  }
+
+  async addExclusion(
+    segment: string,
+  ): Promise<{ removed: number; userExcluded: string[] }> {
+    const res = await fetch(`${this.opts.baseUrl}/api/exclusions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ segment }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`addExclusion: ${res.status} ${body}`);
+    }
+    return (await res.json()) as { removed: number; userExcluded: string[] };
+  }
+
+  async removeExclusion(segment: string): Promise<{ userExcluded: string[] }> {
+    const res = await fetch(
+      `${this.opts.baseUrl}/api/exclusions/${encodeURIComponent(segment)}`,
+      { method: 'DELETE' },
+    );
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`removeExclusion: ${res.status} ${body}`);
+    }
+    return (await res.json()) as { userExcluded: string[] };
+  }
+
   async listRoles(): Promise<RoleDefinition[]> {
     const data = await this.get<{ roles: RoleDefinition[] }>('/api/roles');
     return data.roles;

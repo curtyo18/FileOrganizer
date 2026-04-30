@@ -97,6 +97,13 @@ input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent-line
 .pill.danger { background: oklch(0.70 0.18 25 / 0.14); color: var(--danger); }
 .pill.info { background: oklch(0.74 0.10 230 / 0.14); color: var(--info); }
 
+/* Inline path-segment button: subtle in-flow text that hovers like a link */
+.path-seg {
+  background: transparent; border: 0; padding: 0;
+  color: inherit; font: inherit; cursor: pointer;
+}
+.path-seg:hover { color: var(--accent); text-decoration: underline; }
+
 /* Status dot */
 .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
 .dot.ok { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
