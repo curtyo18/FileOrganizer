@@ -136,4 +136,25 @@ describe('EmptyDirsRepo.listForDrive', () => {
     expect(result.paths).toEqual(['/only']);
     expect(result.truncated).toBe(false);
   });
+
+  it('returns every row without truncation when cap is null', () => {
+    const repo = new EmptyDirsRepo(db);
+    for (let i = 0; i < 7; i += 1) {
+      repo.upsert('d1', `/dir-${String(i).padStart(2, '0')}`, 's1', '2026-01-01T00:00:00Z');
+    }
+    const defaulted = repo.listForDrive('d1');
+    expect(defaulted.paths).toHaveLength(7);
+    expect(defaulted.totalEmpty).toBe(7);
+    expect(defaulted.truncated).toBe(false);
+
+    const capped = repo.listForDrive('d1', 3);
+    expect(capped.paths).toHaveLength(3);
+    expect(capped.totalEmpty).toBe(7);
+    expect(capped.truncated).toBe(true);
+
+    const unbounded = repo.listForDrive('d1', null);
+    expect(unbounded.paths).toHaveLength(7);
+    expect(unbounded.totalEmpty).toBe(7);
+    expect(unbounded.truncated).toBe(false);
+  });
 });

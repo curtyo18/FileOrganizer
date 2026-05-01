@@ -12,6 +12,7 @@ export interface FindEmptyDirsResult {
 
 export interface FindEmptyDirsOptions {
   cap?: number;
+  unbounded?: boolean;
 }
 
 /**
@@ -27,7 +28,8 @@ export function findEmptyDirs(
   options: FindEmptyDirsOptions = {},
 ): FindEmptyDirsResult {
   const repo = new EmptyDirsRepo(db);
-  return repo.listForDrive(driveId, options.cap);
+  const cap = options.unbounded ? null : options.cap;
+  return repo.listForDrive(driveId, cap);
 }
 
 export interface RemoveEmptyDirsResult {

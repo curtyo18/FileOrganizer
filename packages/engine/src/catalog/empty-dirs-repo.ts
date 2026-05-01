@@ -30,23 +30,30 @@ export class EmptyDirsRepo {
     return Number(result.changes);
   }
 
-  listForDrive(driveId: string, cap?: number): EmptyDirsListResult {
-    const limit = cap ?? DEFAULT_LIST_CAP;
+  listForDrive(driveId: string, cap?: number | null): EmptyDirsListResult {
     const totalRow = this.db
       .prepare(`SELECT COUNT(*) AS n FROM empty_dirs WHERE drive_id = ?`)
       .get(driveId) as { n: number };
     const totalEmpty = totalRow.n;
-    const rows = this.db
-      .prepare(
-        `SELECT path FROM empty_dirs WHERE drive_id = ?
-         ORDER BY LENGTH(path) DESC, path ASC
-         LIMIT ?`,
-      )
-      .all(driveId, limit) as { path: string }[];
+    const rows =
+      cap === null
+        ? (this.db
+            .prepare(
+              `SELECT path FROM empty_dirs WHERE drive_id = ?
+               ORDER BY LENGTH(path) DESC, path ASC`,
+            )
+            .all(driveId) as { path: string }[])
+        : (this.db
+            .prepare(
+              `SELECT path FROM empty_dirs WHERE drive_id = ?
+               ORDER BY LENGTH(path) DESC, path ASC
+               LIMIT ?`,
+            )
+            .all(driveId, cap ?? DEFAULT_LIST_CAP) as { path: string }[]);
     return {
       paths: rows.map((r) => r.path),
       totalEmpty,
-      truncated: totalEmpty > rows.length,
+      truncated: cap !== null && totalEmpty > rows.length,
     };
   }
 }

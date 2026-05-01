@@ -84,6 +84,22 @@ describe('findEmptyDirs', () => {
     const result = findEmptyDirs(db, driveId);
     expect(result).toEqual({ paths: [], totalEmpty: 0, truncated: false });
   });
+
+  it('returns the full set with truncated=false when unbounded is true', () => {
+    const repo = new EmptyDirsRepo(db);
+    for (let i = 0; i < 7; i += 1) {
+      repo.upsert(driveId, `/x/dir-${String(i).padStart(2, '0')}`, scanId, '2026-01-01T00:00:00Z');
+    }
+    const capped = findEmptyDirs(db, driveId, { cap: 3 });
+    expect(capped.paths).toHaveLength(3);
+    expect(capped.totalEmpty).toBe(7);
+    expect(capped.truncated).toBe(true);
+
+    const unbounded = findEmptyDirs(db, driveId, { unbounded: true });
+    expect(unbounded.paths).toHaveLength(7);
+    expect(unbounded.totalEmpty).toBe(7);
+    expect(unbounded.truncated).toBe(false);
+  });
 });
 
 describe('removeEmptyDirs', () => {
