@@ -656,6 +656,25 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     return c.json(result);
   });
 
+  app.post('/api/cleanup/empty-dirs/apply-all', async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { driveId?: string };
+    if (!body.driveId) return c.json({ error: 'driveId required' }, 400);
+    const merged = mergeDriveRoots(drives, {});
+    const root = merged.get(body.driveId);
+    if (!root) return c.json({ error: 'no mount path for drive' }, 400);
+    const { paths } = findEmptyDirs(opts.db, body.driveId, { unbounded: true });
+    if (paths.length === 0) {
+      return c.json({ batchId: null, removed: 0, failed: [] });
+    }
+    const result = removeEmptyDirs(opts.db, { driveRoot: root, paths });
+    events.publish({
+      type: 'batch-status',
+      batchId: result.batchId,
+      status: result.failed.length === 0 ? 'completed' : 'failed',
+    });
+    return c.json(result);
+  });
+
   app.get('/api/batches', (c) => {
     const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10), 1000);
     return c.json({ batches: batches.list({ limit }) });

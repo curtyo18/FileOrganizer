@@ -1366,6 +1366,161 @@ describe('cleanup empty-dirs endpoints', () => {
     expect(found).toBeTruthy();
     expect(found!.kind).toBe('cleanup-empty-dirs');
   });
+
+  it('apply-all removes every empty_dirs row for the drive in one batch', async () => {
+    const { existsSync, mkdirSync } = await import('node:fs');
+    const { DriveRepo } = await import('../drives/repo.js');
+    const { EmptyDirsRepo } = await import('../catalog/empty-dirs-repo.js');
+
+    const driveRoot = join(dir, 'apply-all-drive');
+    mkdirSync(driveRoot, { recursive: true });
+    const onDisk = [
+      join(driveRoot, 'a', 'b', 'c'),
+      join(driveRoot, 'a', 'b'),
+      join(driveRoot, 'a'),
+    ];
+    for (const p of onDisk) mkdirSync(p, { recursive: true });
+    const drive = new DriveRepo(db).upsert({
+      volumeSerial: 'AAL',
+      label: 'AAL',
+      currentLetter: null,
+      mountPath: driveRoot,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1,
+      freeBytes: 1,
+    });
+    db.prepare(
+      `INSERT INTO scans (id, drive_id, started_at, status, throttle_profile)
+       VALUES (?, ?, ?, 'completed', 'balanced')`,
+    ).run('scan-aal', drive.id, new Date().toISOString());
+    const repo = new EmptyDirsRepo(db);
+    const now = new Date().toISOString();
+    for (const p of onDisk) repo.upsert(drive.id, p, 'scan-aal', now);
+
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/cleanup/empty-dirs/apply-all`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ driveId: drive.id }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      batchId: string | null;
+      removed: number;
+      failed: { path: string; reason: string }[];
+    };
+    expect(body.removed).toBe(onDisk.length);
+    expect(body.failed).toEqual([]);
+    expect(body.batchId).toBeTruthy();
+    for (const p of onDisk) expect(existsSync(p)).toBe(false);
+    const batchesRes = await fetch(`http://127.0.0.1:${handle.port}/api/batches`);
+    const batchesBody = (await batchesRes.json()) as {
+      batches: { id: string; kind: string }[];
+    };
+    expect(batchesBody.batches.find((b) => b.id === body.batchId)?.kind).toBe(
+      'cleanup-empty-dirs',
+    );
+  });
+
+  it('apply-all surfaces per-path failures for dirs that became non-empty', async () => {
+    const { existsSync, mkdirSync, writeFileSync } = await import('node:fs');
+    const { DriveRepo } = await import('../drives/repo.js');
+    const { EmptyDirsRepo } = await import('../catalog/empty-dirs-repo.js');
+
+    const driveRoot = join(dir, 'apply-all-race');
+    mkdirSync(driveRoot, { recursive: true });
+    const stable1 = join(driveRoot, 'stable1');
+    const stable2 = join(driveRoot, 'stable2');
+    const racy = join(driveRoot, 'racy');
+    for (const p of [stable1, stable2, racy]) mkdirSync(p, { recursive: true });
+    const drive = new DriveRepo(db).upsert({
+      volumeSerial: 'RAC',
+      label: 'RAC',
+      currentLetter: null,
+      mountPath: driveRoot,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1,
+      freeBytes: 1,
+    });
+    db.prepare(
+      `INSERT INTO scans (id, drive_id, started_at, status, throttle_profile)
+       VALUES (?, ?, ?, 'completed', 'balanced')`,
+    ).run('scan-rac', drive.id, new Date().toISOString());
+    const repo = new EmptyDirsRepo(db);
+    const now = new Date().toISOString();
+    for (const p of [stable1, stable2, racy]) repo.upsert(drive.id, p, 'scan-rac', now);
+    // A file lands in racy after the catalog snapshot.
+    writeFileSync(join(racy, 'late.txt'), 'oops');
+
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/cleanup/empty-dirs/apply-all`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ driveId: drive.id }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      batchId: string | null;
+      removed: number;
+      failed: { path: string; reason: string }[];
+    };
+    expect(body.removed).toBe(2);
+    expect(body.failed).toHaveLength(1);
+    expect(body.failed[0]!.path).toBe(racy);
+    expect(body.failed[0]!.reason).toBe('not empty');
+    expect(existsSync(stable1)).toBe(false);
+    expect(existsSync(stable2)).toBe(false);
+    expect(existsSync(racy)).toBe(true);
+  });
+
+  it('apply-all returns a no-op batchId=null when the drive has no empty_dirs rows', async () => {
+    const { mkdirSync } = await import('node:fs');
+    const { DriveRepo } = await import('../drives/repo.js');
+
+    const driveRoot = join(dir, 'apply-all-empty');
+    mkdirSync(driveRoot, { recursive: true });
+    const drive = new DriveRepo(db).upsert({
+      volumeSerial: 'EMP',
+      label: 'EMP',
+      currentLetter: null,
+      mountPath: driveRoot,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1,
+      freeBytes: 1,
+    });
+
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/cleanup/empty-dirs/apply-all`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ driveId: drive.id }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      batchId: string | null;
+      removed: number;
+      failed: { path: string; reason: string }[];
+    };
+    expect(body).toEqual({ batchId: null, removed: 0, failed: [] });
+  });
+
+  it('apply-all rejects missing driveId and unknown drives', async () => {
+    const missing = await fetch(`http://127.0.0.1:${handle.port}/api/cleanup/empty-dirs/apply-all`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(missing.status).toBe(400);
+
+    const unknown = await fetch(`http://127.0.0.1:${handle.port}/api/cleanup/empty-dirs/apply-all`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ driveId: 'nope' }),
+    });
+    expect(unknown.status).toBe(400);
+    const unknownBody = (await unknown.json()) as { error: string };
+    expect(unknownBody.error).toBe('no mount path for drive');
+  });
 });
 
 describe('duplicates pagination', () => {
