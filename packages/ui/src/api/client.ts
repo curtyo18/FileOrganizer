@@ -435,6 +435,27 @@ export class ApiClient {
     }>;
   }
 
+  async applyCleanupAll(input: { driveId: string }): Promise<{
+    batchId: string | null;
+    removed: number;
+    failed: { path: string; reason: string }[];
+  }> {
+    const res = await fetch(`${this.opts.baseUrl}/api/cleanup/empty-dirs/apply-all`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`applyCleanupAll: ${res.status} ${body}`);
+    }
+    return res.json() as Promise<{
+      batchId: string | null;
+      removed: number;
+      failed: { path: string; reason: string }[];
+    }>;
+  }
+
   async cancelScan(scanId: string): Promise<unknown> {
     const res = await fetch(
       `${this.opts.baseUrl}/api/scans/${encodeURIComponent(scanId)}/cancel`,

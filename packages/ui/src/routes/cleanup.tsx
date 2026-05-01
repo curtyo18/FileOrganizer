@@ -144,6 +144,36 @@ export function Cleanup(_props: CleanupProps) {
     }
   };
 
+  const onApplyAll = async () => {
+    if (!activeDriveId || !activeState || activeState.totalEmpty === 0) return;
+    const drive = drives.find((d) => d.id === activeDriveId);
+    const label = drive?.label ?? activeDriveId;
+    if (
+      !window.confirm(
+        `Delete all ${activeState.totalEmpty} empty folders on ${label}? This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const result = await api.applyCleanupAll({ driveId: activeDriveId });
+      setInfo(
+        `Removed ${result.removed} folder${result.removed === 1 ? '' : 's'}` +
+          (result.failed.length > 0 ? ` · ${result.failed.length} failed` : '') +
+          (result.batchId ? ` · batch ${result.batchId.slice(0, 8)}` : ''),
+      );
+      setSelected(new Set());
+      await loadDrive(activeDriveId);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (error) {
     return (
       <div style={{ padding: 16 }}>
@@ -267,7 +297,7 @@ export function Cleanup(_props: CleanupProps) {
               {activeState?.loading
                 ? 'loading…'
                 : activeState
-                  ? `${activeState.totalEmpty} found${activeState.truncated ? ' (truncated, showing first 5000)' : ''}`
+                  ? `${activeState.totalEmpty} found${activeState.truncated ? ' — use Delete all to clean every entry' : ''}`
                   : 'pick a drive'}
             </div>
           </div>
@@ -294,11 +324,18 @@ export function Cleanup(_props: CleanupProps) {
             Select all visible
           </label>
           <button
-            class="btn primary sm"
+            class="btn sm"
             onClick={onApply}
             disabled={busy || selected.size === 0}
           >
             Delete {selected.size}
+          </button>
+          <button
+            class="btn primary sm"
+            onClick={onApplyAll}
+            disabled={busy || !activeState || activeState.totalEmpty === 0}
+          >
+            Delete all ({activeState?.totalEmpty ?? 0})
           </button>
         </div>
         {info ? (
