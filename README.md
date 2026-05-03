@@ -28,22 +28,6 @@ uploaded anywhere. The catalog is a local SQLite file you own and can move.
 - Scans are **resumable** and **throttleable** — run at full speed overnight,
   idle profile during the workday.
 
-## Status
-
-| Milestone | What's in it | State |
-| --- | --- | --- |
-| M0 | Repo setup, monorepo, tooling | ✅ done |
-| M1 | Catalog schema, drives, settings, CLI | ✅ done |
-| M2 | Scan pipeline (walk, hash, EXIF/video metadata, throttle) | ✅ done |
-| M3 | Local web UI (Dashboard / Drives / Scans / Browse) | ✅ done |
-| M4 | Duplicates + Quarantine | ✅ done |
-| M5 | Rules engine + organize + undo | ✅ done |
-| M6 | Drive roles + throttle schedules | ✅ done |
-| M7 | Polish: reconciliation, free-space safety, NAS handling, shortcuts | ✅ done |
-
-See `docs/superpowers/plans/` for the full plan and `docs/superpowers/specs/`
-for the design spec.
-
 ## Prerequisites
 
 - **Node 22 or 24 LTS** (24 recommended). Node 18 is too old.
@@ -196,8 +180,6 @@ Key building blocks:
   hash chunk size, and per-chunk sleep. The scheduler watches the clock
   so a "full-send overnight, idle on weekday mornings" profile is one
   config away.
-
-See the spec linked above for the full architecture description.
 
 ## License
 

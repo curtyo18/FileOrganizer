@@ -171,37 +171,6 @@ export function Sidebar(props: SidebarProps) {
           ),
         )}
       </nav>
-
-      <div style={{ padding: 10, borderTop: '1px solid var(--line)', fontSize: 11 }}>
-        <div class="label-cap" style={{ marginBottom: 6 }}>throttle</div>
-        <div style={{ display: 'flex', gap: 4, marginBottom: 6 }}>
-          {(['idle', 'balanced', 'full-send'] as const).map((p) => {
-            const active = p === 'balanced';
-            return (
-              <div
-                key={p}
-                style={{
-                  flex: 1,
-                  padding: '3px 4px',
-                  borderRadius: 3,
-                  fontSize: 10,
-                  textAlign: 'center',
-                  cursor: 'pointer',
-                  background: active ? 'var(--accent-bg)' : 'var(--bg-2)',
-                  color: active ? 'var(--accent)' : 'var(--fg-2)',
-                  border: active ? '1px solid var(--accent-line)' : '1px solid transparent',
-                  fontWeight: active ? 600 : 400,
-                }}
-              >
-                {p}
-              </div>
-            );
-          })}
-        </div>
-        <div style={{ fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--mono)' }}>
-          balanced · profile defaults
-        </div>
-      </div>
     </aside>
   );
 }
