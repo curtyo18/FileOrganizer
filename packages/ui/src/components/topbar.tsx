@@ -56,10 +56,6 @@ export function TopBar({ section, drives }: TopBarProps) {
           );
         })}
       </div>
-      <div class="div-v" style={{ height: 18 }} />
-      <button class="btn ghost" title="Settings">
-        <Icon name="settings" size={13} />
-      </button>
     </div>
   );
 }
