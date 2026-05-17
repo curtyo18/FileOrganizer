@@ -2207,3 +2207,19 @@ describe('rootPaths confinement — POST /api/scans', () => {
     }
   });
 });
+
+describe('bodyLimit middleware', () => {
+  it('rejects a request body exceeding the 8 MB limit with HTTP 413', async () => {
+    // 9 MB > 8 MB cap — should be rejected before the route handler runs.
+    const bigBody = 'x'.repeat(9 * 1024 * 1024);
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/scans`, {
+      method: 'POST',
+      body: bigBody,
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(res.status).toBe(413);
+    const json = await res.json() as { error: string; maxSize: number };
+    expect(json.error).toBe('request-too-large');
+    expect(json.maxSize).toBe(8 * 1024 * 1024);
+  });
+});
