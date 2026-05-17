@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openCatalog, closeCatalog, type Catalog } from '../catalog/connection.js';
@@ -7,6 +7,7 @@ import { migrate } from '../catalog/migrate.js';
 import { DriveRepo } from '../drives/repo.js';
 import { BatchesRepo } from '../catalog/batches-repo.js';
 import { quarantineFile, restoreFromQuarantine } from './quarantine.js';
+import { QuarantineError } from '@fileorganizer/shared';
 
 let dir: string;
 let db: Catalog;
@@ -119,5 +120,73 @@ describe('quarantineFile', () => {
     expect(() => restoreFromQuarantine({ db, driveRoot, quarantineId: result.quarantineId })).toThrow(
       /file exists at original path/,
     );
+  });
+
+  it('QUARANTINE_COLLISION: quarantining the same path twice in the same batch throws', () => {
+    // quarantineFile checks existsSync(dest) before renaming. If we quarantine
+    // file A into batch B, then write a new file at the original path and try
+    // to quarantine it into the same batch B, the destination slot is already
+    // occupied — triggering QUARANTINE_COLLISION.
+    const batches = new BatchesRepo(db);
+    const batch = batches.start({ kind: 'dedupe', description: 'collision-test' });
+    const src = join(driveRoot, 'collision.jpg');
+
+    writeFileSync(src, 'contents');
+    quarantineFile({
+      db, batchId: batch.id, driveId, driveRoot,
+      sourcePath: src, sha256: 'h1', sizeBytes: 8, mtime: '2024-01-01T00:00:00.000Z',
+    });
+
+    // Put a new file at the same source path so the second call doesn't fail on
+    // "source missing" — only the dest collision should fire.
+    writeFileSync(src, 'contents');
+
+    let caughtErr: unknown;
+    try {
+      quarantineFile({
+        db, batchId: batch.id, driveId, driveRoot,
+        sourcePath: src, sha256: 'h1', sizeBytes: 8, mtime: '2024-01-01T00:00:00.000Z',
+      });
+    } catch (e) {
+      caughtErr = e;
+    }
+
+    expect(caughtErr).toBeInstanceOf(QuarantineError);
+    expect((caughtErr as QuarantineError).code).toBe('QUARANTINE_COLLISION');
+  });
+
+  it('QUARANTINE_NOT_FOUND: restoreFromQuarantine with unknown id throws typed error', () => {
+    let caughtErr: unknown;
+    try {
+      restoreFromQuarantine({ db, driveRoot, quarantineId: 999999 });
+    } catch (e) {
+      caughtErr = e;
+    }
+    expect(caughtErr).toBeInstanceOf(QuarantineError);
+    expect((caughtErr as QuarantineError).code).toBe('QUARANTINE_NOT_FOUND');
+    expect((caughtErr as QuarantineError).message).toMatch(/999999/);
+  });
+
+  it('QUARANTINE_FILE_MISSING: quarantine record exists but file gone from disk throws typed error', () => {
+    const src = join(driveRoot, 'will-vanish.jpg');
+    writeFileSync(src, 'data');
+    const batches = new BatchesRepo(db);
+    const batch = batches.start({ kind: 'dedupe', description: 'missing-test' });
+    const result = quarantineFile({
+      db, batchId: batch.id, driveId, driveRoot,
+      sourcePath: src, sha256: 'hx', sizeBytes: 4, mtime: '2024-01-01T00:00:00.000Z',
+    });
+
+    // Simulate the quarantined file disappearing from disk (e.g., external deletion).
+    unlinkSync(result.quarantinePath);
+
+    let caughtErr: unknown;
+    try {
+      restoreFromQuarantine({ db, driveRoot, quarantineId: result.quarantineId });
+    } catch (e) {
+      caughtErr = e;
+    }
+    expect(caughtErr).toBeInstanceOf(QuarantineError);
+    expect((caughtErr as QuarantineError).code).toBe('QUARANTINE_FILE_MISSING');
   });
 });
