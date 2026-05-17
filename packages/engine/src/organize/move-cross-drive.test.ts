@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   createHash,
 } from 'node:crypto';
@@ -10,6 +10,13 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual };
+});
+
+import * as fsp from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { openCatalog, closeCatalog, type Catalog } from '../catalog/connection.js';
@@ -239,5 +246,66 @@ describe('moveCrossDrive', () => {
     expect(readFileSync(destPath, 'utf8')).toBe('a different file already here');
     const row = db.prepare(`SELECT path FROM files WHERE id = ?`).get(fileId) as { path: string };
     expect(row.path).toBe(expectedDest);
+  });
+
+  it('unlinks the corrupt partial dest before throwing on hash mismatch', async () => {
+    const sourceRoot = resolve(dir, 'SRC');
+    const destRoot = resolve(dir, 'DST');
+    const sourcePath = resolve(sourceRoot, 'b.jpg');
+    const destPath = resolve(destRoot, 'Photos', 'b.jpg');
+    // Seed file with real content but corrupt the catalog hash so the
+    // post-copy re-hash will never match.
+    const fileId = seedFile(sourcePath, 'real content', sourceDriveId);
+    db.prepare(`UPDATE files SET sha256 = ? WHERE id = ?`).run('z'.repeat(64), fileId);
+
+    await expect(
+      moveCrossDrive({
+        db,
+        fileId,
+        destPath,
+        destDriveId,
+        sourceDriveRoot: sourceRoot,
+        batchId,
+        chunkBytes: 64 * 1024,
+      }),
+    ).rejects.toBeInstanceOf(IntegrityError);
+
+    // The partially-written destination must have been removed.
+    expect(existsSync(destPath)).toBe(false);
+  });
+
+  it('propagates the original IntegrityError when the cleanup unlink also fails', async () => {
+    const sourceRoot = resolve(dir, 'SRC');
+    const destRoot = resolve(dir, 'DST');
+    const sourcePath = resolve(sourceRoot, 'c.jpg');
+    const destPath = resolve(destRoot, 'Photos', 'c.jpg');
+    const fileId = seedFile(sourcePath, 'real content 2', sourceDriveId);
+    db.prepare(`UPDATE files SET sha256 = ? WHERE id = ?`).run('z'.repeat(64), fileId);
+
+    // Make unlink fail with a secondary error (e.g. permission denied).
+    const unlinkSpy = vi
+      .spyOn(fsp, 'unlink')
+      .mockRejectedValueOnce(Object.assign(new Error('EPERM'), { code: 'EPERM' }));
+
+    let caught: unknown;
+    try {
+      await moveCrossDrive({
+        db,
+        fileId,
+        destPath,
+        destDriveId,
+        sourceDriveRoot: sourceRoot,
+        batchId,
+        chunkBytes: 64 * 1024,
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    unlinkSpy.mockRestore();
+
+    // The caller must see IntegrityError, not the EPERM from unlink.
+    expect(caught).toBeInstanceOf(IntegrityError);
+    expect((caught as IntegrityError).code).toBe('CROSS_DRIVE_HASH_MISMATCH');
   });
 });
