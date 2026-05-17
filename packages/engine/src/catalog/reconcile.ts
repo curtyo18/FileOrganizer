@@ -1,11 +1,18 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Catalog } from './connection.js';
 import { hashFile } from '../scan/hasher.js';
+import { createLogger, defaultWriter } from '../log.js';
+
+const log = createLogger({ level: 'info', write: defaultWriter, context: { module: 'reconcile' } });
+
+const QUARANTINE_DIR = '_FileOrganizer_quarantine';
 
 export interface ReconcileResult {
   scanned: number;
   fixed: number;
   ambiguous: number;
+  quarantineOrphans: string[];
 }
 
 interface OpRow {
@@ -70,7 +77,81 @@ export async function reconcileOnStartup(db: Catalog): Promise<ReconcileResult> 
     }
   }
 
-  return { scanned: ops.length, fixed, ambiguous };
+  // Quarantine-scope pass: detect files in _FileOrganizer_quarantine/ with no matching DB row
+  const quarantineOrphans = detectQuarantineOrphans(db);
+
+  return { scanned: ops.length, fixed, ambiguous, quarantineOrphans };
+}
+
+interface DriveRow {
+  id: string;
+  mount_path: string | null;
+}
+
+function collectLeafFiles(dir: string, results: string[]): void {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      collectLeafFiles(full, results);
+    } else if (entry.isFile()) {
+      results.push(full);
+    }
+  }
+}
+
+function detectQuarantineOrphans(db: Catalog): string[] {
+  const drives = db.prepare(`SELECT id, mount_path FROM drives`).all() as DriveRow[];
+
+  // Build a Set of all quarantine_path values from the DB for fast lookup
+  const catalogued = new Set<string>(
+    (db.prepare(`SELECT quarantine_path FROM quarantine`).all() as Array<{ quarantine_path: string }>).map(
+      (r) => r.quarantine_path,
+    ),
+  );
+
+  const orphans: string[] = [];
+
+  for (const drive of drives) {
+    if (!drive.mount_path) continue;
+
+    const quarantineRoot = join(drive.mount_path, QUARANTINE_DIR);
+    if (!existsSync(quarantineRoot)) continue;
+
+    let stat;
+    try {
+      stat = statSync(quarantineRoot);
+    } catch {
+      log.warn('reconcile-quarantine-scan-skipped', {
+        drive_id: drive.id,
+        quarantine_root: quarantineRoot,
+        reason: 'stat failed – drive may be disconnected',
+      });
+      continue;
+    }
+    if (!stat.isDirectory()) continue;
+
+    const diskFiles: string[] = [];
+    collectLeafFiles(quarantineRoot, diskFiles);
+
+    for (const filePath of diskFiles) {
+      if (!catalogued.has(filePath)) {
+        orphans.push(filePath);
+        log.warn('reconcile-quarantine-orphan', {
+          drive_id: drive.id,
+          path: filePath,
+          reason: 'file present in quarantine folder but absent from quarantine table',
+        });
+      }
+    }
+  }
+
+  return orphans;
 }
 
 async function decide(op: OpRow): Promise<Decision> {

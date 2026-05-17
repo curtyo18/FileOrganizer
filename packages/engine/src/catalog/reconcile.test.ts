@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -138,6 +138,59 @@ describe('reconcileOnStartup', () => {
 
   it('returns scanned=0 when there are no in-progress ops', async () => {
     const result = await reconcileOnStartup(db);
-    expect(result).toEqual({ scanned: 0, fixed: 0, ambiguous: 0 });
+    expect(result).toEqual({ scanned: 0, fixed: 0, ambiguous: 0, quarantineOrphans: [] });
+  });
+});
+
+describe('reconcileOnStartup – quarantine orphan detection', () => {
+  const QUARANTINE_DIR = '_FileOrganizer_quarantine';
+
+  beforeEach(() => {
+    // Insert a drive with a real mount_path pointing into our temp dir
+    db.prepare(
+      `INSERT INTO drives (id, volume_serial, label, current_letter, kind, last_seen_at, mount_path)
+       VALUES ('d1', 'VOL1', 'TestDrive', 'T', 'local', '2026-01-01T00:00:00Z', ?)`,
+    ).run(dir);
+    // Insert a batch so the quarantine FK can reference it
+    db.prepare(
+      `INSERT INTO batches (id, kind, started_at, status, description, summary)
+       VALUES ('batchA', 'quarantine', '2026-01-01T00:00:00Z', 'completed', 't', '{}')`,
+    ).run();
+  });
+
+  it('detects a quarantine orphan – file on disk with no quarantine row', async () => {
+    // Simulate a crash after renameSync but before INSERT INTO quarantine:
+    // create the file under the quarantine folder without a DB row
+    const orphanPath = join(dir, QUARANTINE_DIR, 'batchA', 'photos', 'img.jpg');
+    mkdirSync(join(dir, QUARANTINE_DIR, 'batchA', 'photos'), { recursive: true });
+    writeFileSync(orphanPath, 'orphan-content');
+
+    // No quarantine row inserted — DB has no record of this file
+
+    const result = await reconcileOnStartup(db);
+
+    // The orphan must appear in the result
+    expect(result.quarantineOrphans).toBeDefined();
+    expect(result.quarantineOrphans).toHaveLength(1);
+    expect(result.quarantineOrphans[0]).toBe(orphanPath);
+  });
+
+  it('does NOT classify a legitimately-present quarantine file as an orphan', async () => {
+    // Create the file under the quarantine folder
+    const quarantinePath = join(dir, QUARANTINE_DIR, 'batchA', 'docs', 'report.pdf');
+    mkdirSync(join(dir, QUARANTINE_DIR, 'batchA', 'docs'), { recursive: true });
+    writeFileSync(quarantinePath, 'legit-content');
+
+    // Insert a matching quarantine row
+    db.prepare(
+      `INSERT INTO quarantine (drive_id, original_path, original_size, original_sha256,
+       original_mtime, quarantine_path, quarantined_at, batch_id)
+       VALUES ('d1', ?, 13, 'abc123', '2026-01-01T00:00:00Z', ?, '2026-01-01T00:00:00Z', 'batchA')`,
+    ).run(join(dir, 'docs', 'report.pdf'), quarantinePath);
+
+    const result = await reconcileOnStartup(db);
+
+    expect(result.quarantineOrphans).toBeDefined();
+    expect(result.quarantineOrphans).toHaveLength(0);
   });
 });
