@@ -11,7 +11,7 @@ import type { Catalog } from '../catalog/connection.js';
 import { DriveRepo } from '../drives/repo.js';
 import { ScansRepo } from '../catalog/scans-repo.js';
 import { SettingsRepo } from '../catalog/settings-repo.js';
-import { ThrottleManager } from '../throttle/manager.js';
+import { ThrottleManager, ThrottleManagerRef } from '../throttle/manager.js';
 import { runScan } from '../scan/orchestrator.js';
 import { detectVolume } from '../drives/volume.js';
 import { createLogger, defaultWriter } from '../log.js';
@@ -34,6 +34,10 @@ export interface CreateServerOptions {
   hostname: string;
   catalogPath?: string;
   onSettingsChanged?: (settings: Settings) => void;
+  /** Process-singleton throttle ref shared with the scheduler in cli/serve.ts.
+   * When omitted the server creates a local ThrottleManager for each scan
+   * (legacy behaviour, used in tests that don't need scheduler integration). */
+  throttle?: ThrottleManagerRef;
 }
 
 export interface ServerHandle {
@@ -94,11 +98,16 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     }
 
     const settings = new SettingsRepo(opts.db).load();
-    const throttle = new ThrottleManager(
-      settings.throttleProfiles,
-      body.profile ?? 'balanced',
-      settings.throttleSchedule,
-    );
+    // Use the process-singleton ref when provided (normal serve path), so the
+    // scheduler's profile transitions reach in-flight scans.  When no ref was
+    // injected (tests, CLI scan command) fall back to a local manager.
+    const throttle: ThrottleManager | ThrottleManagerRef = opts.throttle
+      ? opts.throttle
+      : new ThrottleManager(
+          settings.throttleProfiles,
+          body.profile ?? 'balanced',
+          settings.throttleSchedule,
+        );
     const log = createLogger({ level: 'info', write: defaultWriter });
     const mediainfoPath = body.mediainfoPath ?? '';
     const controller = new AbortController();

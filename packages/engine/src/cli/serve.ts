@@ -4,7 +4,7 @@ import { migrate } from '../catalog/migrate.js';
 import { SettingsRepo } from '../catalog/settings-repo.js';
 import { seedDefaultRules } from '../rules/defaults.js';
 import { seedDefaultRoles } from '../roles/defaults.js';
-import { ThrottleManager } from '../throttle/manager.js';
+import { ThrottleManager, ThrottleManagerRef } from '../throttle/manager.js';
 import { ThrottleScheduler } from '../throttle/scheduler.js';
 import { createServer } from '../api/server.js';
 import { reconcileOnStartup } from '../catalog/reconcile.js';
@@ -46,11 +46,16 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
   optimizer.runIfDue();
   const optimizerHandle = optimizer.startInterval();
 
-  let throttleManager = new ThrottleManager(
-    new SettingsRepo(db).load().throttleProfiles,
+  const initialSettings = new SettingsRepo(db).load();
+  const initialManager = new ThrottleManager(
+    initialSettings.throttleProfiles,
     'balanced',
-    new SettingsRepo(db).load().throttleSchedule,
+    initialSettings.throttleSchedule,
   );
+  // Process-singleton ref: the scheduler and all API-initiated scans share this
+  // handle. Swapping ref.replace() propagates to in-flight scans at their next
+  // chunk boundary without passing them a new reference.
+  const throttleRef = new ThrottleManagerRef(initialManager);
   let scheduler: ThrottleScheduler | null = null;
 
   const server = await createServer({
@@ -58,16 +63,20 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
     port: opts.port ?? 0,
     hostname: '127.0.0.1',
     catalogPath: ptr.catalogPath,
+    throttle: throttleRef,
     onSettingsChanged: (next) => {
-      const activeProfile = throttleManager.current().name;
-      throttleManager = new ThrottleManager(
+      const activeProfile = throttleRef.current().name;
+      const nextManager = new ThrottleManager(
         next.throttleProfiles,
         activeProfile,
         next.throttleSchedule,
       );
+      // Replace the inner manager inside the singleton ref so in-flight scans
+      // observe the new profile without being re-wired.
+      throttleRef.replace(nextManager);
       scheduler?.stop();
       scheduler = new ThrottleScheduler({
-        manager: throttleManager,
+        manager: throttleRef,
         events: server.events,
         intervalMs: 60_000,
       });
@@ -77,7 +86,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
   writePointer(opts.pointerPath, { catalogPath: ptr.catalogPath, uiPort: server.port });
 
   scheduler = new ThrottleScheduler({
-    manager: throttleManager,
+    manager: throttleRef,
     events: server.events,
     intervalMs: 60_000,
   });

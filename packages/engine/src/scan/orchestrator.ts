@@ -12,7 +12,7 @@ import {
   categoryForExtension,
   type CategoryMap,
 } from '@fileorganizer/shared';
-import type { ThrottleManager } from '../throttle/manager.js';
+import type { ThrottleManager, ThrottleManagerRef } from '../throttle/manager.js';
 import type { Logger } from '../log.js';
 
 export interface RunScanOptions {
@@ -20,7 +20,7 @@ export interface RunScanOptions {
   driveId: string;
   roots: string[];
   categoryMap: CategoryMap;
-  throttle: ThrottleManager;
+  throttle: ThrottleManager | ThrottleManagerRef;
   log: Logger;
   mediainfoPath: string;
   extraExcluded?: readonly string[];
