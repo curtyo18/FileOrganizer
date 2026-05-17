@@ -1,6 +1,9 @@
 import { detectDuplicates, countDuplicateGroups, type DuplicateGroup } from './detect.js';
 import { scoreCopies, type DriveContext } from './scorer.js';
 import type { Catalog } from '../catalog/connection.js';
+import { RulesRepo } from '../rules/repo.js';
+import { firstMatch } from '../rules/matcher.js';
+import type { FileRecord } from '@fileorganizer/shared';
 
 export interface DedupeOperation {
   groupSha256: string;
@@ -42,12 +45,59 @@ export function planDedupe(db: Catalog, opts: PlanDedupeOptions): DedupePlan {
   for (const r of driveRows) {
     drives.set(r.id, { kind: r.kind, roles: JSON.parse(r.roles || '[]') });
   }
+  const rules = new RulesRepo(db).list();
+  const fileCache = new Map<number, FileRecord>();
+  const getFileRecord = (fileId: number): FileRecord | null => {
+    if (fileCache.has(fileId)) return fileCache.get(fileId)!;
+    const row = db
+      .prepare(`SELECT * FROM files WHERE id = ?`)
+      .get(fileId) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    const rec: FileRecord = {
+      id: row['id'] as number,
+      driveId: row['drive_id'] as string,
+      path: row['path'] as string,
+      name: row['name'] as string,
+      extension: row['extension'] as string,
+      sizeBytes: row['size_bytes'] as number,
+      category: row['category'] as FileRecord['category'],
+      sha256: row['sha256'] as string,
+      mtime: row['mtime'] as string,
+      ctime: row['ctime'] as string,
+      exifDate: (row['exif_date'] as string | null) ?? null,
+      dateSource: row['date_source'] as FileRecord['dateSource'],
+      width: (row['width'] as number | null) ?? null,
+      height: (row['height'] as number | null) ?? null,
+      durationSeconds: (row['duration_seconds'] as number | null) ?? null,
+      ntfsFileId: (row['ntfs_file_id'] as string | null) ?? null,
+      state: row['state'] as FileRecord['state'],
+      lastVerifiedAt: row['last_verified_at'] as string,
+      scanId: row['scan_id'] as string,
+    };
+    fileCache.set(fileId, rec);
+    return rec;
+  };
   const operations: DedupeOperation[] = [];
   for (const group of groups) {
+    // Resolve the matched rule for any copy in the group (all copies share
+    // the same SHA256 and therefore the same category/extension, so the
+    // first resolvable copy's match is representative for the group).
+    let ruleRole: string | null = null;
+    let destinationTemplates: string[] = [];
+    for (const copy of group.copies) {
+      const file = getFileRecord(copy.fileId);
+      if (!file) continue;
+      const matchedRule = firstMatch(file, rules);
+      if (matchedRule) {
+        ruleRole = matchedRule.destinationRole ?? null;
+        destinationTemplates = [matchedRule.destinationTemplate];
+      }
+      break;
+    }
     const score = scoreCopies(group.copies, {
       drives,
-      ruleRole: null,
-      destinationTemplates: [],
+      ruleRole,
+      destinationTemplates,
     });
     for (const copy of group.copies) {
       if (copy.fileId === score.keeperFileId) continue;

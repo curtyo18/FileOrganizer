@@ -21,10 +21,6 @@ export interface QuarantineResult {
 
 const QUARANTINE_DIR = '_FileOrganizer_quarantine';
 
-export function quarantineRoot(driveRoot: string): string {
-  return join(driveRoot, QUARANTINE_DIR);
-}
-
 export function quarantineFile(input: QuarantineFileInput): QuarantineResult {
   const rel = relative(input.driveRoot, input.sourcePath);
   if (rel.startsWith('..') || rel === '') {
