@@ -153,8 +153,8 @@ before turning it loose on a real library.
   drive priority/overflow on the Roles screen, or move some files
   manually first to make room.
 - **A scan stops with `paused` status** — open it on the Scans screen
-  and click Resume. Scans resume from the last completed directory; no
-  files are re-hashed unnecessarily.
+  and click Resume. Resume re-walks all directories; unchanged files
+  (by size+mtime) are not re-hashed.
 
 ## Architecture
 
