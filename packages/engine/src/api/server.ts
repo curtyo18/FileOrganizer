@@ -97,6 +97,13 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       return c.json({ error: 'either driveId+rootPaths or rootPath is required' }, 400);
     }
 
+    // Guard against concurrent scans on the same drive. If a scan is already
+    // running for this driveId, markMissing (orchestrator.ts) would flag the
+    // second scan's in-flight files as missing when the first scan finishes.
+    if (scans.hasRunning(drive.id)) {
+      return c.json({ error: 'scan-already-running', driveId: drive.id }, 409);
+    }
+
     const settings = new SettingsRepo(opts.db).load();
     // Use the process-singleton ref when provided (normal serve path), so the
     // scheduler's profile transitions reach in-flight scans.  When no ref was
