@@ -1967,3 +1967,243 @@ describe('ThrottleManagerRef singleton: mid-scan profile change', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Sub-fix A: Array.isArray guards on POST endpoints
+// ---------------------------------------------------------------------------
+
+describe('Array.isArray guards — /api/duplicates/apply', () => {
+  it('returns 400 when body.operations is null', async () => {
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/duplicates/apply`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ operations: null }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('operations must be an array');
+  });
+
+  it('returns 400 when body.operations is missing', async () => {
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/duplicates/apply`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('operations must be an array');
+  });
+});
+
+describe('Array.isArray guards — /api/quarantine/restore', () => {
+  it('returns 400 when body.quarantineIds is null', async () => {
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/quarantine/restore`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ quarantineIds: null }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('quarantineIds must be an array');
+  });
+
+  it('returns 400 when body.quarantineIds is missing', async () => {
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/quarantine/restore`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('quarantineIds must be an array');
+  });
+});
+
+describe('Array.isArray guards — /api/organize/apply', () => {
+  it('returns 400 when body.operations is null', async () => {
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/organize/apply`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ operations: null }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('operations must be an array');
+  });
+
+  it('returns 400 when body.operations is missing', async () => {
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/organize/apply`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('operations must be an array');
+  });
+});
+
+describe('Array.isArray guards — /api/organize/auto-apply', () => {
+  it('returns 400 when body.operations is null', async () => {
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/organize/auto-apply`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ operations: null }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('operations must be an array');
+  });
+
+  it('returns 400 when body.operations is missing', async () => {
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/organize/auto-apply`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('operations must be an array');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sub-fix B: scan-null race — POST /api/scans always returns a valid scan
+// ---------------------------------------------------------------------------
+
+describe('scan-null race — POST /api/scans returns a valid scan ID', () => {
+  it('response always contains a valid scan object, not null', async () => {
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    const dataDir = join(dir, 'race-check');
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, 'img.jpg'), 'pixel');
+
+    const post = await fetch(`http://127.0.0.1:${handle.port}/api/scans`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rootPath: dataDir, profile: 'idle' }),
+    });
+    expect(post.status).toBe(201);
+    const body = (await post.json()) as { scan: { id: string; status: string } | null };
+    // scan must never be null — this is the core assertion for the race fix
+    expect(body.scan).not.toBeNull();
+    expect(typeof body.scan!.id).toBe('string');
+    expect(body.scan!.id.length).toBeGreaterThan(0);
+
+    // Wait for completion so afterEach teardown is clean
+    for (let i = 0; i < 50; i += 1) {
+      const got = await fetch(`http://127.0.0.1:${handle.port}/api/scans/${body.scan!.id}`);
+      const r = (await got.json()) as { scan: { status: string } };
+      if (r.scan.status === 'completed') break;
+      await new Promise((r2) => setTimeout(r2, 50));
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sub-fix C: rootPaths (plural) path confinement
+// ---------------------------------------------------------------------------
+
+describe('rootPaths confinement — POST /api/scans', () => {
+  it('returns 400 with path-not-confined when rootPaths contains a path outside any drive', async () => {
+    const { DriveRepo } = await import('../drives/repo.js');
+    const drive = new DriveRepo(db).upsert({
+      volumeSerial: 'CONF-A',
+      label: 'CONF-A',
+      currentLetter: null,
+      mountPath: join(dir, 'drive-a'),
+      kind: 'local',
+      roles: [],
+      totalBytes: 1,
+      freeBytes: 1,
+    });
+
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/scans`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        driveId: drive.id,
+        rootPaths: ['/some/path/outside/any/drive'],
+      }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string; path: string };
+    expect(body.error).toBe('path-not-confined');
+    expect(body.path).toBe('/some/path/outside/any/drive');
+  });
+
+  it('returns 400 when any rootPath in the batch is outside the drive (whole-batch rejection)', async () => {
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    const { DriveRepo } = await import('../drives/repo.js');
+    const mountPath = join(dir, 'drive-b');
+    mkdirSync(mountPath, { recursive: true });
+    writeFileSync(join(mountPath, 'ok.jpg'), 'ok');
+
+    const drive = new DriveRepo(db).upsert({
+      volumeSerial: 'CONF-B',
+      label: 'CONF-B',
+      currentLetter: null,
+      mountPath,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1,
+      freeBytes: 1,
+    });
+
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/scans`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        driveId: drive.id,
+        rootPaths: [mountPath, '/tmp/outside'],
+      }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string; path: string };
+    expect(body.error).toBe('path-not-confined');
+    expect(body.path).toBe('/tmp/outside');
+  });
+
+  it('succeeds (201) when all rootPaths are under the registered drive mountPath', async () => {
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    const { DriveRepo } = await import('../drives/repo.js');
+    const mountPath = join(dir, 'drive-c');
+    const subDir = join(mountPath, 'sub');
+    mkdirSync(subDir, { recursive: true });
+    writeFileSync(join(subDir, 'ok.jpg'), 'ok');
+
+    const drive = new DriveRepo(db).upsert({
+      volumeSerial: 'CONF-C',
+      label: 'CONF-C',
+      currentLetter: null,
+      mountPath,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1,
+      freeBytes: 1,
+    });
+
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/scans`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        driveId: drive.id,
+        rootPaths: [subDir],
+        profile: 'idle',
+      }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { scan: { id: string } | null };
+    expect(body.scan).not.toBeNull();
+    expect(typeof body.scan!.id).toBe('string');
+
+    // Wait for completion so afterEach teardown is clean
+    for (let i = 0; i < 50; i += 1) {
+      const got = await fetch(`http://127.0.0.1:${handle.port}/api/scans/${body.scan!.id}`);
+      const r = (await got.json()) as { scan: { status: string } };
+      if (r.scan.status === 'completed') break;
+      await new Promise((r2) => setTimeout(r2, 50));
+    }
+  });
+});
