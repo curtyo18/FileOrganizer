@@ -1,4 +1,5 @@
 import { createReadStream, createWriteStream, mkdirSync } from 'node:fs';
+import { unlink } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import { dirname } from 'node:path';
 import { DriveError, IntegrityError } from '@fileorganizer/shared';
@@ -77,6 +78,13 @@ export async function moveCrossDrive(input: MoveCrossDriveInput): Promise<MoveOu
     sleepMs: 0,
   });
   if (liveHash !== row.sha256) {
+    // Clean up corrupt partial dest; swallow secondary I/O failures so the
+    // original IntegrityError surfaces to the caller.
+    try {
+      await unlink(finalDestPath);
+    } catch {
+      // intentionally ignored
+    }
     throw new IntegrityError(
       'CROSS_DRIVE_HASH_MISMATCH',
       `dest hash ${liveHash} != catalog ${row.sha256}`,
