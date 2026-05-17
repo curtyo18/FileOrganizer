@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { categoryForExtension, DEFAULT_CATEGORY_MAP } from './settings.js';
+import { categoryForExtension, DEFAULT_CATEGORY_MAP, type CategoryMap } from './settings.js';
 
 describe('categoryForExtension', () => {
   it('matches known extensions case-insensitively', () => {
@@ -12,5 +12,10 @@ describe('categoryForExtension', () => {
   it('returns null for unknown extensions', () => {
     expect(categoryForExtension(DEFAULT_CATEGORY_MAP, 'exe')).toBeNull();
     expect(categoryForExtension(DEFAULT_CATEGORY_MAP, '')).toBeNull();
+  });
+
+  it('returns null for unknown category keys (does not silently widen)', () => {
+    const customMap: CategoryMap = { custom_kind: ['xyz'] };
+    expect(categoryForExtension(customMap, 'xyz')).toBeNull();
   });
 });

@@ -1,3 +1,4 @@
+import { CATEGORIES } from './types.js';
 import type { Category, ThrottleProfileName } from './types.js';
 import type { ThrottleProfile, ThrottleScheduleEntry } from './throttle.js';
 
@@ -40,6 +41,7 @@ export function categoryForExtension(map: CategoryMap, extension: string): Categ
   const ext = extension.toLowerCase().replace(/^\./, '');
   for (const [cat, exts] of Object.entries(map)) {
     if (exts.includes(ext)) {
+      if (!(CATEGORIES as readonly string[]).includes(cat)) return null;
       return cat as Category;
     }
   }
