@@ -60,4 +60,58 @@ describe('SettingsRepo', () => {
     expect(reloaded.uiPort).toBe(12345);
     expect(reloaded.recentArchiveCutoffYears).toBe(3);
   });
+
+  it('load() drops unknown keys that appear in the DB settings row', () => {
+    // Seed the DB with a settings row that contains an unknown key
+    const rowWithBogus = {
+      catalogVersion: 1,
+      categoryMap: DEFAULT_CATEGORY_MAP,
+      throttleProfiles: {},
+      throttleSchedule: [],
+      recentArchiveCutoffYears: 2,
+      uiPort: 0,
+      userExcluded: [],
+      bogusField: 'should-be-dropped',
+    };
+    db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`).run(
+      'settings',
+      JSON.stringify(rowWithBogus),
+    );
+
+    const s = new SettingsRepo(db).load();
+    // The returned object must not contain the unknown key
+    expect((s as unknown as Record<string, unknown>)['bogusField']).toBeUndefined();
+  });
+
+  it('load() + save() round-trip does not persist unknown keys', () => {
+    // Seed with an unknown key
+    const rowWithBogus = {
+      catalogVersion: 1,
+      categoryMap: DEFAULT_CATEGORY_MAP,
+      throttleProfiles: {},
+      throttleSchedule: [],
+      recentArchiveCutoffYears: 2,
+      uiPort: 7777,
+      userExcluded: [],
+      anotherBogusKey: 42,
+    };
+    db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`).run(
+      'settings',
+      JSON.stringify(rowWithBogus),
+    );
+
+    const repo = new SettingsRepo(db);
+    const loaded = repo.load();
+    // Save immediately (round-trip)
+    repo.save(loaded);
+
+    // Read raw JSON from DB and confirm unknown key is gone
+    const raw = db.prepare(`SELECT value FROM settings WHERE key = 'settings'`).get() as {
+      value: string;
+    };
+    const persisted = JSON.parse(raw.value) as Record<string, unknown>;
+    expect(persisted['anotherBogusKey']).toBeUndefined();
+    // Known key must still be present
+    expect(persisted['uiPort']).toBe(7777);
+  });
 });

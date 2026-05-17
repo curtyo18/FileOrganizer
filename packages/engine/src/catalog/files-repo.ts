@@ -97,11 +97,15 @@ export class FilesRepo {
     const clauses: string[] = [];
     const params: (string | number)[] = [driveId, currentScanId];
     for (const raw of scanRoots) {
+      // Escape literal LIKE wildcards in the scan-root path so that `%` and `_`
+      // in folder names are not treated as SQL wildcards. ESCAPE '\\' is the
+      // SQLite convention for a backslash escape character.
       const trimmed = raw.replace(/[/\\]+$/, '');
-      clauses.push('path LIKE ?');
-      params.push(trimmed + '/%');
-      clauses.push('path LIKE ?');
-      params.push(trimmed + '\\%');
+      const escaped = trimmed.replace(/%/g, '\\%').replace(/_/g, '\\_');
+      clauses.push('path LIKE ? ESCAPE \'\\\'');
+      params.push(escaped + '/%');
+      clauses.push('path LIKE ? ESCAPE \'\\\'');
+      params.push(escaped + '\\%');
     }
     const sql = `UPDATE files SET state = 'missing'
        WHERE drive_id = ? AND scan_id != ? AND state = 'indexed'

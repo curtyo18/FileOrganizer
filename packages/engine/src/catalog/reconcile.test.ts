@@ -142,6 +142,62 @@ describe('reconcileOnStartup', () => {
   });
 });
 
+describe('reconcileOnStartup – atomicity', () => {
+  it('rolls back all op updates when a DB error occurs mid-loop', async () => {
+    // Insert a batch
+    db.prepare(
+      `INSERT INTO batches (id, kind, started_at, status, description, summary) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run('b-atomic', 'move', '2024-01-01T00:00:00Z', 'in-progress', 't', '{}');
+
+    // Insert 3 in-progress ops; none have matching filesystem files so all will resolve to 'failed'
+    const ids = [1, 2, 3].map((i) =>
+      insertOp({
+        batch_id: 'b-atomic',
+        kind: 'move',
+        source_path: join(dir, `gone${String(i)}`),
+        dest_path: join(dir, `also-gone${String(i)}`),
+        pre_hash: 'x',
+        post_hash: 'y',
+        status: 'in-progress',
+      }),
+    );
+
+    // Patch db.prepare so the 3rd UPDATE operations call throws — simulating a mid-loop crash.
+    // We wrap the real prepare and count UPDATE operations calls.
+    let updateOpsCallCount = 0;
+    const originalPrepare = db.prepare.bind(db);
+    const prepareStub = (sql: string) => {
+      const stmt = originalPrepare(sql);
+      if (sql.startsWith('UPDATE operations SET status')) {
+        updateOpsCallCount += 1;
+        if (updateOpsCallCount === 3) {
+          // Return a fake statement whose run() throws
+          return {
+            run: (..._args: unknown[]) => {
+              throw new Error('simulated DB crash on 3rd UPDATE');
+            },
+          } as unknown as ReturnType<typeof db.prepare>;
+        }
+      }
+      return stmt;
+    };
+    db.prepare = prepareStub as typeof db.prepare;
+
+    await expect(reconcileOnStartup(db)).rejects.toThrow('simulated DB crash');
+
+    // Restore real prepare
+    db.prepare = originalPrepare;
+
+    // All 3 ops must still be 'in-progress' — the transaction rolled back
+    for (const id of ids) {
+      const op = db.prepare(`SELECT status FROM operations WHERE id = ?`).get(id) as {
+        status: string;
+      };
+      expect(op.status).toBe('in-progress');
+    }
+  });
+});
+
 describe('reconcileOnStartup – quarantine orphan detection', () => {
   const QUARANTINE_DIR = '_FileOrganizer_quarantine';
 

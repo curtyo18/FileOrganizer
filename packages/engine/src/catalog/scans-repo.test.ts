@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -59,5 +59,26 @@ describe('ScansRepo', () => {
     expect(reloaded!.status).toBe('completed');
     expect(reloaded!.progress.filesIndexed).toBe(8);
     expect(reloaded!.stats.errors).toBe(0);
+  });
+
+  it('finish() does not call findById (no TOCTOU pre-read)', () => {
+    // After fixing the TOCTOU, finish() should perform a single atomic UPDATE
+    // without doing a SELECT first. We verify by spying on findById.
+    const repo = new ScansRepo(db);
+    const scan = repo.start({ driveId, rootPaths: ['/foo'], throttleProfile: 'balanced' });
+
+    const spy = vi.spyOn(repo, 'findById');
+    repo.finish(scan.id, 'completed', { errors: 3, filesIndexed: 5 });
+
+    // findById must NOT have been called inside finish()
+    expect(spy).not.toHaveBeenCalled();
+
+    // And the values from statsOverride must be stored
+    const reloaded = repo.findById(scan.id);
+    expect(reloaded!.status).toBe('completed');
+    expect(reloaded!.stats.errors).toBe(3);
+    expect(reloaded!.stats.filesIndexed).toBe(5);
+
+    spy.mockRestore();
   });
 });

@@ -54,12 +54,22 @@ export class ScansRepo {
   }
 
   finish(id: string, status: ScanStatus, statsOverride: Partial<ScanStats>): void {
-    const existing = this.findById(id);
-    if (!existing) return;
-    const stats: ScanStats = { ...existing.progress, errors: 0, ...statsOverride };
+    // Merge stats atomically in a single UPDATE to eliminate the TOCTOU window
+    // that existed when finish() called findById() then UPDATE separately.
+    // SQLite json_patch(progress, override) merges the caller-supplied override
+    // onto the existing progress column in one statement — no pre-read needed.
+    // We apply two patches: first overlay {"errors":0} onto progress (so the
+    // baseline stats mirror the last progress snapshot), then overlay the
+    // caller's statsOverride to honour any explicit values.
     this.db
-      .prepare(`UPDATE scans SET status = ?, finished_at = ?, stats = ? WHERE id = ?`)
-      .run(status, new Date().toISOString(), JSON.stringify(stats), id);
+      .prepare(
+        `UPDATE scans
+            SET status = ?,
+                finished_at = ?,
+                stats = json_patch(json_patch(progress, '{"errors":0}'), ?)
+          WHERE id = ?`,
+      )
+      .run(status, new Date().toISOString(), JSON.stringify(statsOverride), id);
   }
 
   pause(id: string): void {
