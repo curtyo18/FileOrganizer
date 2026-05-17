@@ -9792,7 +9792,7 @@ for (const op of input.operations) {
 for (const [driveId, bytesNeeded] of bytesPerDrive) {
   const drive = driveById.get(driveId);
   if (!drive) continue;
-  const safetyMargin = Math.floor(drive.totalBytes * 0.05);
+  const safetyMargin = Math.floor(drive.freeBytes * 0.05);
   if (drive.freeBytes - safetyMargin < bytesNeeded) {
     new BatchesRepo(input.db).finish(batch.id, 'failed', { reason: 'insufficient free space' });
     throw new Error(`insufficient free space on ${drive.label}: need ${bytesNeeded} bytes, have ${drive.freeBytes - safetyMargin} bytes after 5% safety margin`);

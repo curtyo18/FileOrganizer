@@ -231,8 +231,8 @@ function assertFreeSpace(input: ApplyApprovedBatchInput): void {
   const drivesById = new Map(new DriveRepo(input.db).list().map((d) => [d.id, d]));
   for (const [driveId, bytesNeeded] of bytesPerDrive) {
     const drive = drivesById.get(driveId);
-    if (!drive) continue;
-    const safetyMargin = Math.floor(drive.totalBytes * FREE_SPACE_SAFETY_FRACTION);
+    if (!drive) throw new Error(`unknown destDriveId ${driveId} in batch`);
+    const safetyMargin = Math.floor(drive.freeBytes * FREE_SPACE_SAFETY_FRACTION);
     const usable = drive.freeBytes - safetyMargin;
     if (usable < bytesNeeded) {
       throw new Error(
