@@ -12,7 +12,7 @@ import { firstMatch, matches } from '../rules/matcher.js';
 import { renderTemplate } from '../rules/template.js';
 import { resolveRole } from '../rules/role-resolver.js';
 
-export type OperationKindPlanned = 'same-drive-move' | 'cross-drive-move' | 'noop';
+type OperationKindPlanned = 'same-drive-move' | 'cross-drive-move' | 'noop';
 
 export interface PlannedOperation {
   fileId: number;
@@ -25,13 +25,13 @@ export interface PlannedOperation {
   estimatedBytes: number;
 }
 
-export interface UnresolvedRole {
+interface UnresolvedRole {
   ruleId: string;
   reason: string;
   fileCount: number;
 }
 
-export interface RuleStat {
+interface RuleStat {
   ruleId: string;
   wouldMatch: number;
   actualMatch: number;

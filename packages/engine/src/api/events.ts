@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { ThrottleProfileName } from '@fileorganizer/shared';
 
-export interface ScanProgressEvent {
+interface ScanProgressEvent {
   type: 'scan-progress';
   scanId: string;
   filesIndexed: number;
@@ -10,7 +10,7 @@ export interface ScanProgressEvent {
   bytesProcessed: number;
 }
 
-export interface BatchStatusEvent {
+interface BatchStatusEvent {
   type: 'batch-status';
   batchId: string;
   status: string;
