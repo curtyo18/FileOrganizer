@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import type { RoutableProps } from 'preact-router';
 import type { DriveRecord, ScanRecord } from '@fileorganizer/shared';
 import { defaultApiClient } from '../api/client.js';
@@ -18,37 +18,28 @@ export function Scans(_props: RoutableProps) {
   const [info, setInfo] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const pollTimer = useRef<number | null>(null);
+  // Polling runs unconditionally from mount so a transient failure on first
+  // load never permanently disables live progress updates. The interval simply
+  // retries on each tick; errors are surfaced to the engine-offline indicator
+  // in the top bar via the global reloadGlobal failure counter (Sub-fix A).
+  const POLL_INTERVAL_MS = 1500;
 
   const reload = async () => {
     try {
       const [d, s] = await Promise.all([api.listDrives(), api.listScans()]);
       setDrives(d);
       setScans(s as ScanRecord[]);
-    } catch (e) {
-      setError((e as Error).message);
+    } catch {
+      // Swallow per-tick errors here; the global App-level polling (Sub-fix A)
+      // surfaces persistent engine-offline state to the user.
     }
   };
 
   useEffect(() => {
-    reload();
-    return () => {
-      if (pollTimer.current !== null) {
-        clearInterval(pollTimer.current);
-        pollTimer.current = null;
-      }
-    };
+    void reload();
+    const id = window.setInterval(() => { void reload(); }, POLL_INTERVAL_MS);
+    return () => clearInterval(id);
   }, []);
-
-  useEffect(() => {
-    const anyActive = scans.some((s) => s.status === 'running' || s.status === 'paused');
-    if (anyActive && pollTimer.current === null) {
-      pollTimer.current = window.setInterval(() => reload(), 1500);
-    } else if (!anyActive && pollTimer.current !== null) {
-      clearInterval(pollTimer.current);
-      pollTimer.current = null;
-    }
-  }, [scans]);
 
   const onScan = async () => {
     setError(null);

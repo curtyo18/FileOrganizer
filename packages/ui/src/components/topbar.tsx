@@ -5,9 +5,10 @@ import { driveLetter, fillPercent } from '../lib/format.js';
 interface TopBarProps {
   section: string;
   drives: DriveRecord[];
+  backendReachable?: boolean;
 }
 
-export function TopBar({ section, drives }: TopBarProps) {
+export function TopBar({ section, drives, backendReachable = true }: TopBarProps) {
   const sectionLabel = section ? section.charAt(0).toUpperCase() + section.slice(1) : 'Dashboard';
   return (
     <div
@@ -28,6 +29,33 @@ export function TopBar({ section, drives }: TopBarProps) {
         <Icon name="chevron" size={10} />
         <span style={{ color: 'var(--fg-0)' }}>{sectionLabel}</span>
       </div>
+      {!backendReachable && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 5,
+            padding: '2px 8px',
+            borderRadius: 3,
+            background: 'oklch(0.25 0.06 25)',
+            border: '1px solid var(--danger)',
+            fontSize: 10.5,
+            color: 'var(--danger)',
+          }}
+          title="The engine is not responding. Data shown may be stale."
+        >
+          <span
+            style={{
+              width: 6,
+              height: 6,
+              borderRadius: '50%',
+              background: 'var(--danger)',
+              flexShrink: 0,
+            }}
+          />
+          engine offline
+        </div>
+      )}
       <div style={{ flex: 1 }} />
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
         {drives.slice(0, 8).map((d) => {

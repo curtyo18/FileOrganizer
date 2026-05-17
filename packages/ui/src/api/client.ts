@@ -121,12 +121,14 @@ export class ApiClient {
     minSize?: number;
     limit?: number;
     offset?: number;
+    signal?: AbortSignal;
   } = {}): Promise<DedupePlanResponse> {
     const minSize = input.minSize ?? 1;
     const limit = input.limit ?? 50;
     const offset = input.offset ?? 0;
     return this.get<DedupePlanResponse>(
       `/api/duplicates?minSize=${minSize}&limit=${limit}&offset=${offset}`,
+      input.signal,
     );
   }
 
@@ -473,8 +475,10 @@ export class ApiClient {
     return this.opts.baseUrl;
   }
 
-  private async get<T>(path: string): Promise<T> {
-    const res = await fetch(`${this.opts.baseUrl}${path}`, { method: 'GET' });
+  private async get<T>(path: string, signal?: AbortSignal): Promise<T> {
+    const init: RequestInit = { method: 'GET' };
+    if (signal != null) init.signal = signal;
+    const res = await fetch(`${this.opts.baseUrl}${path}`, init);
     if (!res.ok) {
       const body = await res.text();
       throw new Error(`API ${path} failed: ${res.status} ${body}`);
