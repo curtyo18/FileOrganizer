@@ -1,0 +1,51 @@
+# Default to text with LF line endings
+* text=auto eol=lf
+
+# Explicitly text
+*.ts            text eol=lf
+*.tsx           text eol=lf
+*.js            text eol=lf
+*.jsx           text eol=lf
+*.mjs           text eol=lf
+*.cjs           text eol=lf
+*.json          text eol=lf
+*.md            text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.css           text eol=lf
+*.html          text eol=lf
+*.sql           text eol=lf
+*.sh            text eol=lf
+*.txt           text eol=lf
+*.gitignore     text eol=lf
+*.gitattributes text eol=lf
+*.prettierignore text eol=lf
+*.prettierrc    text eol=lf
+*.eslintrc      text eol=lf
+*.gitkeep       text eol=lf
+LICENSE         text eol=lf
+README*         text eol=lf
+
+# Binary — never normalize
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.ico           binary
+*.pdf           binary
+*.zip           binary
+*.tar.gz        binary
+*.db            binary
+*.sqlite        binary
+*.node          binary
+*.exe           binary
+*.dll           binary
+*.so            binary
+*.dylib         binary
+*.map           binary
+
+# bin/ — engine ships binaries (MediaInfo CLI) here; treat as binary
+packages/engine/bin/**  binary
+
+# Generated lockfiles — keep LF but don't munge
+package-lock.json text eol=lf
