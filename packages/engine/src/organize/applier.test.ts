@@ -506,6 +506,254 @@ describe('applyApprovedBatch', () => {
     expect(ops).toHaveLength(0);
   });
 
+  it('Test A: allows batch on near-full disk when bytes needed fit within freeBytes-based safety margin', async () => {
+    // Drive: 1 TB total, 500 MB free. Batch needs 400 MB.
+    // Correct formula: safetyMargin = 500MB * 0.05 = 25MB, usable = 475MB, 400 <= 475 → ALLOWED
+    // Broken formula:  safetyMargin = 1TB  * 0.05 = 51GB, usable negative             → REJECTED
+    const drives = new DriveRepo(db);
+    const srcRoot = join(dir, 'src-a');
+    const dstRoot = join(dir, 'dst-a');
+    mkdirSync(srcRoot, { recursive: true });
+    mkdirSync(dstRoot, { recursive: true });
+
+    const TB = 1_000_000_000_000;
+    const MB = 1_000_000;
+
+    const srcId = drives.upsert({
+      volumeSerial: 'V-SRC-A',
+      label: 'SRC-A',
+      currentLetter: null,
+      mountPath: null,
+      kind: 'local',
+      roles: [],
+      totalBytes: TB,
+      freeBytes: TB,
+    }).id;
+    const dstId = drives.upsert({
+      volumeSerial: 'V-DST-A',
+      label: 'DST-A',
+      currentLetter: null,
+      mountPath: null,
+      kind: 'local',
+      roles: [],
+      totalBytes: TB,
+      freeBytes: 500 * MB,
+    }).id;
+    db.prepare(
+      `INSERT INTO scans (id, drive_id, started_at, status, throttle_profile) VALUES (?, ?, ?, ?, ?)`,
+    ).run('s-a', srcId, new Date().toISOString(), 'completed', 'balanced');
+
+    const srcPath = join(srcRoot, 'big.bin');
+    const bigContent = 'big-file-content';
+    writeFileSync(srcPath, bigContent);
+    new FilesRepo(db).upsertOne({
+      driveId: srcId,
+      path: srcPath,
+      name: 'big.bin',
+      extension: 'bin',
+      sizeBytes: Buffer.byteLength(bigContent),
+      category: 'image',
+      sha256: shaOf(bigContent),
+      mtime: '2024-01-01T00:00:00.000Z',
+      ctime: '2024-01-01T00:00:00.000Z',
+      exifDate: null,
+      dateSource: 'mtime',
+      width: null,
+      height: null,
+      durationSeconds: null,
+      ntfsFileId: null,
+      state: 'indexed',
+      scanId: 's-a',
+    });
+    const fileId = (db.prepare(`SELECT id FROM files WHERE path = ?`).get(srcPath) as { id: number }).id;
+
+    const planned: PlannedOperation[] = [
+      {
+        fileId,
+        ruleId: 'r-a',
+        sourceDriveId: srcId,
+        sourcePath: srcPath,
+        destDriveId: dstId,
+        destPath: join(dstRoot, 'big.bin'),
+        kind: 'cross-drive-move',
+        estimatedBytes: 400 * MB,
+      },
+    ];
+
+    const result = await applyApprovedBatch({
+      db,
+      description: 'near-full allowed',
+      operations: planned,
+      driveRoots: new Map([
+        [srcId, srcRoot],
+        [dstId, dstRoot],
+      ]),
+      chunkBytes: 1024,
+    });
+
+    expect(result.completed).toBe(1);
+    expect(result.failed).toBe(0);
+  });
+
+  it('Test B: rejects batch with informative error when bytes needed exceed usable freeBytes', async () => {
+    // Drive: 1 TB total, 100 MB free. Batch needs 200 MB.
+    // Correct formula: safetyMargin = 100MB * 0.05 = 5MB, usable = 95MB, 200 > 95 → REJECTED
+    const drives = new DriveRepo(db);
+    const srcRoot = join(dir, 'src-b');
+    const dstRoot = join(dir, 'dst-b');
+    mkdirSync(srcRoot, { recursive: true });
+    mkdirSync(dstRoot, { recursive: true });
+
+    const TB = 1_000_000_000_000;
+    const MB = 1_000_000;
+
+    const srcId = drives.upsert({
+      volumeSerial: 'V-SRC-B',
+      label: 'SRC-B',
+      currentLetter: null,
+      mountPath: null,
+      kind: 'local',
+      roles: [],
+      totalBytes: TB,
+      freeBytes: TB,
+    }).id;
+    const dstId = drives.upsert({
+      volumeSerial: 'V-DST-B',
+      label: 'DST-B',
+      currentLetter: null,
+      mountPath: null,
+      kind: 'local',
+      roles: [],
+      totalBytes: TB,
+      freeBytes: 100 * MB,
+    }).id;
+    db.prepare(
+      `INSERT INTO scans (id, drive_id, started_at, status, throttle_profile) VALUES (?, ?, ?, ?, ?)`,
+    ).run('s-b', srcId, new Date().toISOString(), 'completed', 'balanced');
+
+    const srcPath = join(srcRoot, 'toobig.bin');
+    writeFileSync(srcPath, 'x');
+    new FilesRepo(db).upsertOne({
+      driveId: srcId,
+      path: srcPath,
+      name: 'toobig.bin',
+      extension: 'bin',
+      sizeBytes: 1,
+      category: 'image',
+      sha256: 'hb',
+      mtime: '2024-01-01T00:00:00.000Z',
+      ctime: '2024-01-01T00:00:00.000Z',
+      exifDate: null,
+      dateSource: 'mtime',
+      width: null,
+      height: null,
+      durationSeconds: null,
+      ntfsFileId: null,
+      state: 'indexed',
+      scanId: 's-b',
+    });
+    const fileId = (db.prepare(`SELECT id FROM files WHERE path = ?`).get(srcPath) as { id: number }).id;
+
+    const planned: PlannedOperation[] = [
+      {
+        fileId,
+        ruleId: 'r-b',
+        sourceDriveId: srcId,
+        sourcePath: srcPath,
+        destDriveId: dstId,
+        destPath: join(dstRoot, 'toobig.bin'),
+        kind: 'cross-drive-move',
+        estimatedBytes: 200 * MB,
+      },
+    ];
+
+    await expect(
+      applyApprovedBatch({
+        db,
+        description: 'over-free-capacity',
+        operations: planned,
+        driveRoots: new Map([
+          [srcId, srcRoot],
+          [dstId, dstRoot],
+        ]),
+        chunkBytes: 1024,
+      }),
+    ).rejects.toThrow(/insufficient free space on DST-B/);
+  });
+
+  it('Test C: throws hard error when batch references an unknown destDriveId', async () => {
+    // A cross-drive op whose destDriveId is not in the drives table must
+    // throw — not silently skip — the free-space check.
+    const drives = new DriveRepo(db);
+    const srcRoot = join(dir, 'src-c');
+    const dstRoot = join(dir, 'dst-c');
+    mkdirSync(srcRoot, { recursive: true });
+    mkdirSync(dstRoot, { recursive: true });
+
+    const srcId = drives.upsert({
+      volumeSerial: 'V-SRC-C',
+      label: 'SRC-C',
+      currentLetter: null,
+      mountPath: null,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1_000_000_000,
+      freeBytes: 1_000_000_000,
+    }).id;
+    db.prepare(
+      `INSERT INTO scans (id, drive_id, started_at, status, throttle_profile) VALUES (?, ?, ?, ?, ?)`,
+    ).run('s-c', srcId, new Date().toISOString(), 'completed', 'balanced');
+
+    const srcPath = join(srcRoot, 'ghost.bin');
+    writeFileSync(srcPath, 'x');
+    new FilesRepo(db).upsertOne({
+      driveId: srcId,
+      path: srcPath,
+      name: 'ghost.bin',
+      extension: 'bin',
+      sizeBytes: 1,
+      category: 'image',
+      sha256: 'hc',
+      mtime: '2024-01-01T00:00:00.000Z',
+      ctime: '2024-01-01T00:00:00.000Z',
+      exifDate: null,
+      dateSource: 'mtime',
+      width: null,
+      height: null,
+      durationSeconds: null,
+      ntfsFileId: null,
+      state: 'indexed',
+      scanId: 's-c',
+    });
+    const fileId = (db.prepare(`SELECT id FROM files WHERE path = ?`).get(srcPath) as { id: number }).id;
+
+    const planned: PlannedOperation[] = [
+      {
+        fileId,
+        ruleId: 'r-c',
+        sourceDriveId: srcId,
+        sourcePath: srcPath,
+        destDriveId: 'no-such-drive-id',
+        destPath: join(dstRoot, 'ghost.bin'),
+        kind: 'cross-drive-move',
+        estimatedBytes: 1_000,
+      },
+    ];
+
+    await expect(
+      applyApprovedBatch({
+        db,
+        description: 'unknown-drive',
+        operations: planned,
+        driveRoots: new Map([
+          [srcId, srcRoot],
+          ['no-such-drive-id', dstRoot],
+        ]),
+        chunkBytes: 1024,
+      }),
+    ).rejects.toThrow(/no-such-drive-id/);
+  });
+
   it('aborts the batch as DriveError when a cross-drive copy hits a disconnect-class errno', async () => {
     const sourceDriveId = seedDrive('SRC');
     const destDriveId = seedDrive('NAS');
