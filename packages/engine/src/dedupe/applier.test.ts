@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -81,6 +81,68 @@ describe('applyDedupe', () => {
     expect(result.failed).toBe(0);
     const survivors = ['a.jpg', 'b.jpg', 'c.jpg'].filter((n) => existsSync(join(driveRoot, n)));
     expect(survivors).toHaveLength(1);
+  });
+
+  it('FILE_MISSING: file in catalog but deleted from disk fails with typed IntegrityError', async () => {
+    const files = new FilesRepo(db);
+    const body = 'duplicate-for-missing-test';
+    const hash = sha(body);
+    // Register two files with identical hashes so planDedupe produces an op.
+    const paths = ['missing.jpg', 'keeper.jpg'].map((name) => join(driveRoot, name));
+    for (const p of paths) {
+      writeFileSync(p, body);
+    }
+    for (const p of paths) {
+      files.upsertOne({
+        driveId,
+        path: p,
+        name: p.split('/').pop()!,
+        extension: 'jpg',
+        sizeBytes: body.length,
+        category: 'image',
+        sha256: hash,
+        mtime: '2024-01-01T00:00:00.000Z',
+        ctime: '2024-01-01T00:00:00.000Z',
+        exifDate: null,
+        dateSource: 'mtime',
+        width: null,
+        height: null,
+        durationSeconds: null,
+        ntfsFileId: null,
+        state: 'indexed',
+        scanId: 's',
+      });
+    }
+    const plan = planDedupe(db, { minSizeBytes: 1 });
+    expect(plan.operations).toHaveLength(1);
+    // Delete the non-keeper from disk after it has been catalogued.
+    const opToRemove = plan.operations[0]!;
+    const row = db
+      .prepare(`SELECT path FROM files WHERE id = ?`)
+      .get(opToRemove.removeFileId) as { path: string } | undefined;
+    unlinkSync(row!.path);
+
+    const result = await applyDedupe({
+      db,
+      operations: plan.operations,
+      driveRoots: new Map([[driveId, driveRoot]]),
+    });
+
+    // The op must fail (not panic with raw ENOENT).
+    expect(result.failed).toBe(1);
+    expect(result.completed).toBe(0);
+
+    // The recorded operation must show status='failed' with an error message
+    // that comes from IntegrityError('FILE_MISSING', ...), not a raw system error.
+    const ops = db
+      .prepare(`SELECT status, error_message FROM operations WHERE batch_id = ?`)
+      .all(result.batchId) as { status: string; error_message: string | null }[];
+    const failedOp = ops.find((o) => o.status === 'failed');
+    expect(failedOp).toBeDefined();
+    expect(failedOp!.error_message).not.toBeNull();
+    // Must NOT be a raw ENOENT — the guard throws IntegrityError first.
+    expect(failedOp!.error_message).not.toMatch(/ENOENT/);
+    expect(failedOp!.error_message).toMatch(/no longer exists/i);
   });
 
   it('aborts ops when live hash does not match catalog hash', async () => {

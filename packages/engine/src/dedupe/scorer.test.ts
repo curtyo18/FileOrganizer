@@ -69,4 +69,21 @@ describe('scoreCopies', () => {
     );
     expect(result.keeperFileId).toBe(2);
   });
+
+  it('throws when called with zero copies', () => {
+    const drives = new Map<string, { kind: 'local'; roles: string[] }>();
+    expect(() =>
+      scoreCopies([], { drives, ruleRole: null, destinationTemplates: [] }),
+    ).toThrow('scoreCopies requires at least one copy');
+  });
+
+  it("returns reasons[0] === 'only copy' when there is exactly one copy", () => {
+    const drives = new Map([['d1', { kind: 'local' as const, roles: [] }]]);
+    const result = scoreCopies(
+      [copy({ fileId: 42, driveId: 'd1' })],
+      { drives, ruleRole: null, destinationTemplates: [] },
+    );
+    expect(result.keeperFileId).toBe(42);
+    expect(result.reasons[0]).toBe('only copy');
+  });
 });
