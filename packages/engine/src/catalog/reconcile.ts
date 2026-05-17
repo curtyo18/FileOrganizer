@@ -1,4 +1,5 @@
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
+import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Catalog } from './connection.js';
 import { hashFile } from '../scan/hasher.js';
@@ -78,7 +79,7 @@ export async function reconcileOnStartup(db: Catalog): Promise<ReconcileResult> 
   }
 
   // Quarantine-scope pass: detect files in _FileOrganizer_quarantine/ with no matching DB row
-  const quarantineOrphans = detectQuarantineOrphans(db);
+  const quarantineOrphans = await detectQuarantineOrphans(db);
 
   return { scanned: ops.length, fixed, ambiguous, quarantineOrphans };
 }
@@ -88,24 +89,24 @@ interface DriveRow {
   mount_path: string | null;
 }
 
-function collectLeafFiles(dir: string, results: string[]): void {
+async function collectLeafFiles(dir: string, results: string[]): Promise<void> {
   let entries;
   try {
-    entries = readdirSync(dir, { withFileTypes: true });
+    entries = await readdir(dir, { withFileTypes: true });
   } catch {
     return;
   }
   for (const entry of entries) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
-      collectLeafFiles(full, results);
+      await collectLeafFiles(full, results);
     } else if (entry.isFile()) {
       results.push(full);
     }
   }
 }
 
-function detectQuarantineOrphans(db: Catalog): string[] {
+async function detectQuarantineOrphans(db: Catalog): Promise<string[]> {
   const drives = db.prepare(`SELECT id, mount_path FROM drives`).all() as DriveRow[];
 
   // Build a Set of all quarantine_path values from the DB for fast lookup
@@ -137,7 +138,7 @@ function detectQuarantineOrphans(db: Catalog): string[] {
     if (!stat.isDirectory()) continue;
 
     const diskFiles: string[] = [];
-    collectLeafFiles(quarantineRoot, diskFiles);
+    await collectLeafFiles(quarantineRoot, diskFiles);
 
     for (const filePath of diskFiles) {
       if (!catalogued.has(filePath)) {
