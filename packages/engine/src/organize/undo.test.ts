@@ -322,12 +322,15 @@ describe('undoBatch', () => {
     expect(qRow).toBeDefined();
     expect(existsSync(qRow!.quarantinePath)).toBe(true);
 
-    // Catalog still points at dest (unchanged from the original move).
+    // After re-quarantine, catalog must reflect reality: state='quarantined',
+    // path pointing at the new quarantine location — NOT the stale destPath.
     const file = db
       .prepare(`SELECT path, drive_id AS driveId, state FROM files WHERE id = ?`)
       .get(fileId) as { path: string; driveId: string; state: string };
-    expect(file.path).toBe(destPath);
-    expect(file.driveId).toBe(destDriveId);
+    expect(file.state).toBe('quarantined');
+    // The path must be the new quarantine path (under sourceRoot), not destPath.
+    expect(file.path).not.toBe(destPath);
+    expect(file.path).toContain('_FileOrganizer_quarantine');
 
     // The failed undo op carries a descriptive error message.
     const failedOp = db
@@ -338,5 +341,98 @@ describe('undoBatch', () => {
       .get(undo.undoBatchId) as { errorMessage: string | null } | undefined;
     expect(failedOp).toBeDefined();
     expect(failedOp!.errorMessage).toMatch(/could not remove dest/);
+  });
+
+  it('reverseCompletedViaExisting: restores source from quarantine, dest stays intact', async () => {
+    // When the dest already had identical content, moveCrossDrive produces
+    // completed-via-existing: source is quarantined, dest untouched.
+    // undoBatch must restore the source file and mark files.state='indexed'.
+    const sourceDriveId = seedDrive('SRC2');
+    const destDriveId = seedDrive('DST2');
+    seedScan(sourceDriveId);
+    const ruleId = seedRule();
+    const sourceRoot = resolve(dir, 'SRC2');
+    const destRoot = resolve(dir, 'DST2');
+    const sourcePath = resolve(sourceRoot, 'b.jpg');
+    const destPath = resolve(destRoot, 'Photos', 'b.jpg');
+    const content = 'identical-content';
+    const fileId = seedFile(sourceDriveId, sourcePath, content);
+
+    // Pre-create dest with the same content so resolveCollision picks same-content.
+    mkdirSync(resolve(destPath, '..'), { recursive: true });
+    writeFileSync(destPath, content);
+
+    const apply = await applyApprovedBatch({
+      db,
+      description: 'forward-via-existing',
+      operations: [
+        plannedOp(
+          fileId,
+          ruleId,
+          'cross-drive-move',
+          sourceDriveId,
+          sourcePath,
+          destDriveId,
+          destPath,
+        ),
+      ],
+      driveRoots: new Map([
+        [sourceDriveId, sourceRoot],
+        [destDriveId, destRoot],
+      ]),
+      chunkBytes: 64 * 1024,
+    });
+
+    // After apply: source was quarantined (not at original path), dest still present.
+    expect(existsSync(sourcePath)).toBe(false);
+    expect(existsSync(destPath)).toBe(true);
+    const preUndoFile = db
+      .prepare(`SELECT state FROM files WHERE id = ?`)
+      .get(fileId) as { state: string };
+    expect(preUndoFile.state).toBe('quarantined');
+
+    // Verify a quarantine row exists.
+    const qBefore = db
+      .prepare(
+        `SELECT id FROM quarantine WHERE original_path = ? AND batch_id = ? ORDER BY id DESC LIMIT 1`,
+      )
+      .get(sourcePath, apply.batchId) as { id: number } | undefined;
+    expect(qBefore).toBeDefined();
+
+    const undo = await undoBatch({
+      db,
+      batchId: apply.batchId,
+      driveRoots: new Map([
+        [sourceDriveId, sourceRoot],
+        [destDriveId, destRoot],
+      ]),
+    });
+
+    expect(undo.reverted).toBe(1);
+    expect(undo.skipped).toBe(0);
+    expect(undo.errors).toHaveLength(0);
+
+    // Source file is back at its original path with correct content.
+    expect(existsSync(sourcePath)).toBe(true);
+    expect(readFileSync(sourcePath, 'utf8')).toBe(content);
+
+    // Dest file is still present (it was never the source's copy).
+    expect(existsSync(destPath)).toBe(true);
+
+    // Catalog: state='indexed', path unchanged.
+    const file = db
+      .prepare(`SELECT path, drive_id AS driveId, state FROM files WHERE id = ?`)
+      .get(fileId) as { path: string; driveId: string; state: string };
+    expect(file.state).toBe('indexed');
+    expect(file.path).toBe(sourcePath);
+    expect(file.driveId).toBe(sourceDriveId);
+
+    // Quarantine row deleted after restore.
+    const qAfter = db
+      .prepare(
+        `SELECT id FROM quarantine WHERE original_path = ? AND batch_id = ? ORDER BY id DESC LIMIT 1`,
+      )
+      .get(sourcePath, apply.batchId) as { id: number } | undefined;
+    expect(qAfter).toBeUndefined();
   });
 });

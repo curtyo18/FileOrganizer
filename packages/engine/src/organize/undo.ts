@@ -191,7 +191,7 @@ async function reverseCrossDriveMove(
   } catch (err) {
     const reason = (err as Error).message;
     try {
-      quarantineFile({
+      const rollback = quarantineFile({
         db: opts.db,
         batchId: op.batchId,
         driveId: op.sourceDriveId,
@@ -201,6 +201,21 @@ async function reverseCrossDriveMove(
         sizeBytes: qSnapshot.originalSize,
         mtime: qSnapshot.originalMtime,
       });
+      // Update catalog to reflect the re-quarantined reality so the reconciler
+      // can reason about this file without manual SQL (spec §12.3).
+      try {
+        opts.db
+          .prepare(`UPDATE files SET state = 'quarantined', path = ? WHERE id = ?`)
+          .run(rollback.quarantinePath, op.fileId);
+      } catch (catalogErr) {
+        // A secondary DB failure must not mask the original unlink error; log and
+        // continue so the outer throw surfaces the real cause to the caller.
+        console.error('undo-catalog-update-failed', {
+          op_id: op.id,
+          file_id: op.fileId,
+          error: (catalogErr as Error).message,
+        });
+      }
     } catch (rollbackErr) {
       throw new Error(
         `could not remove dest at ${op.destPath} after restoring source; rollback failed: ${(rollbackErr as Error).message} (original: ${reason})`,
