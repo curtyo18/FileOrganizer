@@ -872,7 +872,6 @@ export interface ThrottleProfile {
   networkHashWorkers: number;
   readChunkBytes: number;
   interChunkSleepMs: number;
-  processPriority: 'below-normal' | 'normal' | 'high';
   maxOpenFiles: number;
 }
 
@@ -890,7 +889,6 @@ export const DEFAULT_THROTTLE_PROFILES: Record<ThrottleProfileName, ThrottleProf
     networkHashWorkers: 1,
     readChunkBytes: 256 * 1024,
     interChunkSleepMs: 5,
-    processPriority: 'below-normal',
     maxOpenFiles: 4,
   },
   balanced: {
@@ -899,7 +897,6 @@ export const DEFAULT_THROTTLE_PROFILES: Record<ThrottleProfileName, ThrottleProf
     networkHashWorkers: 1,
     readChunkBytes: 1024 * 1024,
     interChunkSleepMs: 1,
-    processPriority: 'normal',
     maxOpenFiles: 16,
   },
   'full-send': {
@@ -908,7 +905,6 @@ export const DEFAULT_THROTTLE_PROFILES: Record<ThrottleProfileName, ThrottleProf
     networkHashWorkers: 2,
     readChunkBytes: 4 * 1024 * 1024,
     interChunkSleepMs: 0,
-    processPriority: 'normal',
     maxOpenFiles: 64,
   },
 };
@@ -929,7 +925,6 @@ export interface ThrottleProfile {
   networkHashWorkers: number;
   readChunkBytes: number;
   interChunkSleepMs: number;
-  processPriority: 'below-normal' | 'normal' | 'high';
   maxOpenFiles: number;
 }
 
@@ -948,7 +943,6 @@ export function defaultThrottleProfiles(cpuCount: number): Record<ThrottleProfil
       networkHashWorkers: 1,
       readChunkBytes: 256 * 1024,
       interChunkSleepMs: 5,
-      processPriority: 'below-normal',
       maxOpenFiles: 4,
     },
     balanced: {
@@ -957,7 +951,6 @@ export function defaultThrottleProfiles(cpuCount: number): Record<ThrottleProfil
       networkHashWorkers: 1,
       readChunkBytes: 1024 * 1024,
       interChunkSleepMs: 1,
-      processPriority: 'normal',
       maxOpenFiles: 16,
     },
     'full-send': {
@@ -966,7 +959,6 @@ export function defaultThrottleProfiles(cpuCount: number): Record<ThrottleProfil
       networkHashWorkers: 2,
       readChunkBytes: 4 * 1024 * 1024,
       interChunkSleepMs: 0,
-      processPriority: 'normal',
       maxOpenFiles: 64,
     },
   };
@@ -9254,7 +9246,7 @@ export function Throttle() {
           return (
             <div key={name} style="margin-bottom:12px">
               <strong>{name}</strong>
-              <div class="muted">workers: local {p.localHashWorkers} / nas {p.networkHashWorkers} · chunk {p.readChunkBytes}B · sleep {p.interChunkSleepMs}ms · priority {p.processPriority}</div>
+              <div class="muted">workers: local {p.localHashWorkers} / nas {p.networkHashWorkers} · chunk {p.readChunkBytes}B · sleep {p.interChunkSleepMs}ms</div>
               <input type="number" min={1} max={32} value={p.localHashWorkers} onInput={(e) => {
                 const v = parseInt((e.target as HTMLInputElement).value, 10);
                 setSettings({
