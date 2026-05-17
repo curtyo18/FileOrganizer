@@ -1199,7 +1199,6 @@ Task: M1-T03"
     "better-sqlite3": "^12.0.0",
     "hono": "^4.6.0",
     "@hono/node-server": "^1.13.0",
-    "@hono/node-ws": "^1.0.0",
     "exifr": "^7.1.0",
     "sharp": "^0.33.5",
     "uuid": "^10.0.0",

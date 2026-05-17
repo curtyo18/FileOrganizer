@@ -36,7 +36,7 @@ The following are deliberately out of scope for v1 and deferred to later version
 
 Three layers, all running locally on the user's machine:
 
-1. **Engine** — headless Node 22 + TypeScript service. Owns all filesystem access, the catalog, scanning, organizing, and dedup. Exposes a local HTTP+WebSocket API.
+1. **Engine** — headless Node 22 + TypeScript service. Owns all filesystem access, the catalog, scanning, organizing, and dedup. Exposes a local HTTP API.
 2. **Catalog** — single SQLite database file at a user-chosen location, containing every persisted piece of state.
 3. **UI** — TypeScript + Preact static frontend served by the engine on `127.0.0.1:<port>` and opened in the user's default browser.
 
@@ -465,10 +465,11 @@ Local web UI, served by the engine on `127.0.0.1:<port>`, opened in the user's d
 
 ## 11. API (Engine ↔ UI)
 
-REST + WebSocket on the same `127.0.0.1:<port>` Hono server.
+REST on a `127.0.0.1:<port>` Hono server. All endpoints are request/response: rule CRUD, drive CRUD, scan control, plan, approve batch, undo, list duplicates, restore from quarantine, settings, throttle profiles, etc.
 
-- **REST** for request/response: rule CRUD, drive CRUD, scan control, plan, approve batch, undo, list duplicates, restore from quarantine, etc.
-- **WebSocket** for live events: scan progress, apply progress, throttle profile changes, drive connect/disconnect, batch status transitions.
+**Live-state UX is polling-based**, not event-streamed. The UI runs a 3-second sidebar poll (`app.tsx`'s `reloadGlobal`) plus per-route polling (e.g. `scans.tsx` at ~1.5s while a scan is active) to surface engine state changes. This is the permanent delivery mechanism — no SSE or WebSocket endpoint is planned. `EventBus` exists internally for engine-side coordination (scheduler ↔ throttle, etc.) but does not deliver to the browser.
+
+Decision rationale: the engine is local 127.0.0.1, polling cost is negligible, the 1.5-3s lag only matters in one screen (active scan progress) where it's tolerable, and the engineering cost of SSE/WebSocket reconnect + heartbeat + state-replay logic outweighed the UX benefit. The 2026-05-17 quality review considered adding SSE delivery and rejected it.
 
 Endpoints are hand-written in TS; request/response types live in `shared/`. No OpenAPI generation, no tRPC, no GraphQL. Loopback-only binding. Random unprivileged port chosen at startup; UI reads it from the pointer file. No auth — only access path is loopback on the user's own machine.
 
