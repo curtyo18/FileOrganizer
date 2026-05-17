@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { createReadStream, existsSync, readdirSync, statSync } from 'node:fs';
@@ -49,6 +50,20 @@ export interface ServerHandle {
 export async function createServer(opts: CreateServerOptions): Promise<ServerHandle> {
   const app = new Hono();
   const events = new EventBus();
+
+  // 8 MB cap on all routes. GETs don't send bodies so this is a no-op for
+  // them. The largest expected mutation payload is a JSON operation list
+  // (hundreds of KB at most), so 8 MB gives a very wide safety margin while
+  // still blocking request-flooding and memory-exhaustion attacks.
+  const BODY_LIMIT = 8 * 1024 * 1024;
+  app.use(
+    '*',
+    bodyLimit({
+      maxSize: BODY_LIMIT,
+      onError: (c) => c.json({ error: 'request-too-large', maxSize: BODY_LIMIT }, 413),
+    }),
+  );
+
   const drives = new DriveRepo(opts.db);
   const scans = new ScansRepo(opts.db);
   const activeScans = new Map<string, AbortController>();
