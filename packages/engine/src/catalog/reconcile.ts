@@ -44,41 +44,57 @@ export async function reconcileOnStartup(db: Catalog): Promise<ReconcileResult> 
   let fixed = 0;
   let ambiguous = 0;
 
+  // Pre-compute all decisions before entering the synchronous DB transaction.
+  // better-sqlite3 transactions are sync-only, but decide() is async (file hashing).
+  // We process ops serially rather than in parallel to avoid overwhelming the
+  // filesystem with concurrent hash operations on large in-progress sets.
+  const decisions: Array<{ op: OpRow; decision: Decision }> = [];
   for (const op of ops) {
     const decision = await decide(op);
-    db.prepare(`UPDATE operations SET status = ?, error_message = ? WHERE id = ?`).run(
-      decision.status,
-      decision.message,
-      op.id,
-    );
+    decisions.push({ op, decision });
     if (decision.message.includes('ambiguous')) ambiguous += 1;
     else fixed += 1;
   }
 
-  const touchedBatches = db
-    .prepare(`SELECT id AS batch_id FROM batches WHERE status = 'in-progress'`)
-    .all() as Array<{ batch_id: string }>;
-
-  for (const { batch_id } of touchedBatches) {
-    const counts = db
-      .prepare(
-        `SELECT
-           SUM(CASE WHEN status IN ('pending','in-progress') THEN 1 ELSE 0 END) AS active,
-           SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
-           COUNT(*) AS total
-         FROM operations WHERE batch_id = ?`,
-      )
-      .get(batch_id) as { active: number | null; failed: number | null; total: number | null };
-    if ((counts.total ?? 0) === 0) continue;
-    if ((counts.active ?? 0) === 0) {
-      const finalStatus = (counts.failed ?? 0) > 0 ? 'failed' : 'completed';
-      db.prepare(
-        `UPDATE batches SET status = ?, finished_at = ? WHERE id = ? AND status = 'in-progress'`,
-      ).run(finalStatus, new Date().toISOString(), batch_id);
+  // Apply all op updates and batch finalizations in a single atomic transaction.
+  // A mid-loop crash previously left a mix of updated and stale rows; wrapping
+  // both loops in one transaction gives all-or-nothing semantics so a restart
+  // re-processes the full set correctly.
+  db.transaction(() => {
+    for (const { op, decision } of decisions) {
+      db.prepare(`UPDATE operations SET status = ?, error_message = ? WHERE id = ?`).run(
+        decision.status,
+        decision.message,
+        op.id,
+      );
     }
-  }
 
-  // Quarantine-scope pass: detect files in _FileOrganizer_quarantine/ with no matching DB row
+    const touchedBatches = db
+      .prepare(`SELECT id AS batch_id FROM batches WHERE status = 'in-progress'`)
+      .all() as Array<{ batch_id: string }>;
+
+    for (const { batch_id } of touchedBatches) {
+      const counts = db
+        .prepare(
+          `SELECT
+             SUM(CASE WHEN status IN ('pending','in-progress') THEN 1 ELSE 0 END) AS active,
+             SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+             COUNT(*) AS total
+           FROM operations WHERE batch_id = ?`,
+        )
+        .get(batch_id) as { active: number | null; failed: number | null; total: number | null };
+      if ((counts.total ?? 0) === 0) continue;
+      if ((counts.active ?? 0) === 0) {
+        const finalStatus = (counts.failed ?? 0) > 0 ? 'failed' : 'completed';
+        db.prepare(
+          `UPDATE batches SET status = ?, finished_at = ? WHERE id = ? AND status = 'in-progress'`,
+        ).run(finalStatus, new Date().toISOString(), batch_id);
+      }
+    }
+  })();
+
+  // Quarantine-scope pass: detect files in _FileOrganizer_quarantine/ with no matching DB row.
+  // This is async filesystem I/O and must NOT be inside the synchronous DB transaction above.
   const quarantineOrphans = await detectQuarantineOrphans(db);
 
   return { scanned: ops.length, fixed, ambiguous, quarantineOrphans };

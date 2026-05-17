@@ -161,4 +161,50 @@ describe('FilesRepo', () => {
     repo.markMissing(driveId, newScanId, ['/x/foo']);
     expect(repo.findByPath(driveId, '/x/foobar/a.jpg')!.state).toBe('indexed');
   });
+
+  it('markMissing does not match sibling paths when scan root contains literal %', () => {
+    // /scan-root%/photo01.jpg would match /scan-root%1.jpg via unescaped LIKE
+    const repo = new FilesRepo(db);
+    // Target: file UNDER the scan root (contains %)
+    repo.upsertOne(input('/scan-root%/photo%1.jpg', 'h1', '2024-01-01T00:00:00.000Z'));
+    // Sibling: same prefix but NOT under the scan root
+    repo.upsertOne(input('/scan-root-other/photo%1.jpg', 'h2', '2024-01-01T00:00:00.000Z'));
+    // Plain file in sibling without wildcard chars - should also NOT be matched
+    repo.upsertOne(input('/scan-root-other/photo01.jpg', 'h3', '2024-01-01T00:00:00.000Z'));
+
+    const newScanId = 'test-scan-2';
+    db.prepare(
+      `INSERT INTO scans (id, drive_id, started_at, status, throttle_profile) VALUES (?, ?, ?, ?, ?)`,
+    ).run(newScanId, driveId, new Date().toISOString(), 'running', 'balanced');
+
+    // Only mark missing for /scan-root% (i.e. none of the files re-appear in new scan)
+    repo.markMissing(driveId, newScanId, ['/scan-root%']);
+
+    // The file under /scan-root% should be marked missing
+    expect(repo.findByPath(driveId, '/scan-root%/photo%1.jpg')!.state).toBe('missing');
+    // Siblings under /scan-root-other must NOT be marked missing
+    expect(repo.findByPath(driveId, '/scan-root-other/photo%1.jpg')!.state).toBe('indexed');
+    expect(repo.findByPath(driveId, '/scan-root-other/photo01.jpg')!.state).toBe('indexed');
+  });
+
+  it('markMissing does not match sibling paths when scan root contains literal _', () => {
+    // /scan-root_a/photo_a.jpg is under the root; /scan-root-other/photoxa.jpg should NOT match
+    const repo = new FilesRepo(db);
+    // File UNDER the scan root (contains _)
+    repo.upsertOne(input('/scan-root_a/photo_a.jpg', 'h1', '2024-01-01T00:00:00.000Z'));
+    // Sibling: different root that would match if _ were treated as LIKE wildcard
+    repo.upsertOne(input('/scan-root-other/photoxa.jpg', 'h2', '2024-01-01T00:00:00.000Z'));
+
+    const newScanId = 'test-scan-2';
+    db.prepare(
+      `INSERT INTO scans (id, drive_id, started_at, status, throttle_profile) VALUES (?, ?, ?, ?, ?)`,
+    ).run(newScanId, driveId, new Date().toISOString(), 'running', 'balanced');
+
+    repo.markMissing(driveId, newScanId, ['/scan-root_a']);
+
+    // File under /scan-root_a marked missing (not re-seen in new scan)
+    expect(repo.findByPath(driveId, '/scan-root_a/photo_a.jpg')!.state).toBe('missing');
+    // File under /scan-root-other must NOT be matched via _ wildcard
+    expect(repo.findByPath(driveId, '/scan-root-other/photoxa.jpg')!.state).toBe('indexed');
+  });
 });
