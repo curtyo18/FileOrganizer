@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { walk, type WalkOptions } from './walker.js';
+import { walk, type WalkOptions, MAX_DEPTH } from './walker.js';
+import type { Logger } from '../log.js';
 
 let root: string;
 
@@ -25,6 +26,19 @@ const opts: Omit<WalkOptions, 'roots'> = {
   excluded: new Set(['Windows', 'node_modules']),
   extraExcluded: [],
 };
+
+function makeLogger(): { logger: Logger; warns: Array<{ msg: string; fields: Record<string, unknown> }> } {
+  const warns: Array<{ msg: string; fields: Record<string, unknown> }> = [];
+  const noop = () => {};
+  const logger: Logger = {
+    debug: noop,
+    info: noop,
+    warn: (msg, fields) => warns.push({ msg, fields: fields ?? {} }),
+    error: noop,
+    child: () => logger,
+  };
+  return { logger, warns };
+}
 
 describe('walk', () => {
   it('emits files matching extension allowlist', async () => {
@@ -175,5 +189,66 @@ describe('walk onEmptyDir', () => {
     // sibling empty leaves, aborting from inside the 5th callback leaves
     // exactly 5 callbacks fired.
     expect(fired).toHaveLength(5);
+  });
+});
+
+describe('walk cycle detection', () => {
+  it('terminates when a symlink loop points back to an ancestor dir, logs a warning, and still returns non-loop files', async () => {
+    // Structure: root/sub/ + root/keep.jpg + root/sub/loop -> root/
+    mkdirSync(join(root, 'sub'), { recursive: true });
+    writeFileSync(join(root, 'keep.jpg'), 'pixel');
+    // POSIX symlink pointing back to root — creates an infinite cycle
+    symlinkSync(root, join(root, 'sub', 'loop'));
+
+    const { logger, warns } = makeLogger();
+    const seen: string[] = [];
+
+    // Use a timeout to guard in case cycle detection is missing and it hangs.
+    // vitest default timeout is 5 s; a stack overflow would terminate first anyway.
+    for await (const entry of walk({ ...opts, roots: [root], log: logger })) {
+      seen.push(entry.path.replace(root, '').replace(/\\/g, '/'));
+    }
+
+    // The non-loop file must be returned.
+    expect(seen).toContain('/keep.jpg');
+
+    // A cycle-detection warning must have been logged.
+    const cycleWarn = warns.find((w) => w.msg === 'walker-cycle-detected');
+    expect(cycleWarn).toBeDefined();
+    expect(typeof cycleWarn?.fields['path']).toBe('string');
+  });
+
+  it('terminates when depth exceeds MAX_DEPTH and logs a depth-limit warning', async () => {
+    // Build a directory tree just past the limit.
+    // We use a smaller depth option to keep the test fast.
+    const TEST_DEPTH = MAX_DEPTH + 2;
+    let cur = root;
+    for (let i = 0; i < TEST_DEPTH; i++) {
+      cur = join(cur, `d${i}`);
+      mkdirSync(cur, { recursive: true });
+    }
+    // Put a file at the very bottom (should NOT be seen — it's past the limit).
+    writeFileSync(join(cur, 'deep.jpg'), 'x');
+    // Put a file at root level (SHOULD be seen).
+    writeFileSync(join(root, 'shallow.jpg'), 'y');
+
+    const { logger, warns } = makeLogger();
+    const seen: string[] = [];
+
+    for await (const entry of walk({ ...opts, roots: [root], log: logger })) {
+      seen.push(entry.path.replace(root, '').replace(/\\/g, '/'));
+    }
+
+    // The shallow file is within depth limit.
+    expect(seen).toContain('/shallow.jpg');
+    // The deeply nested file is beyond MAX_DEPTH and must not appear.
+    expect(seen).not.toContain(
+      '/' + Array.from({ length: TEST_DEPTH }, (_, i) => `d${i}`).join('/') + '/deep.jpg',
+    );
+
+    // A depth-limit warning must have been logged.
+    const depthWarn = warns.find((w) => w.msg === 'walker-depth-limit');
+    expect(depthWarn).toBeDefined();
+    expect(typeof depthWarn?.fields['depth']).toBe('number');
   });
 });
