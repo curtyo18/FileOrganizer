@@ -254,7 +254,6 @@ Three profiles, hot-swappable mid-scan:
 | NAS hash workers | 1 | 1 | 2 |
 | Read chunk size | 256 KB | 1 MB | 4 MB |
 | Inter-chunk sleep (ms) | 5 | 1 | 0 |
-| Process priority | below normal | normal | normal |
 | Max open files | 4 | 16 | 64 |
 
 NAS workers are capped low even on `full-send` because the bottleneck is network bandwidth and concurrent reads thrash mechanical disks.

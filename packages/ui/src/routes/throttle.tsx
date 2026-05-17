@@ -389,21 +389,6 @@ function ProfileCard({ profile, onChange }: ProfileCardProps) {
           onInput={(e) => onChange({ maxOpenFiles: num(e) })}
         />
       </ProfileField>
-      <ProfileField label="Process priority">
-        <select
-          value={profile.processPriority}
-          onChange={(e) =>
-            onChange({
-              processPriority: (e.target as HTMLSelectElement)
-                .value as ThrottleProfile['processPriority'],
-            })
-          }
-        >
-          <option value="below-normal">below-normal</option>
-          <option value="normal">normal</option>
-          <option value="high">high</option>
-        </select>
-      </ProfileField>
     </div>
   );
 }
