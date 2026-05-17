@@ -92,6 +92,17 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       if (!body.rootPaths || body.rootPaths.length === 0) {
         return c.json({ error: 'rootPaths required when starting from existing driveId' }, 400);
       }
+      // Sub-fix C: resolve each path and verify it is under the drive's mountPath.
+      // If mountPath is not recorded for the drive, skip the confinement check.
+      if (drive.mountPath) {
+        const mountPath = resolve(drive.mountPath);
+        for (const p of body.rootPaths) {
+          const resolved = resolve(p);
+          if (resolved !== mountPath && !resolved.startsWith(mountPath + '/')) {
+            return c.json({ error: 'path-not-confined', path: p }, 400);
+          }
+        }
+      }
       roots = body.rootPaths;
     } else {
       return c.json({ error: 'either driveId+rootPaths or rootPath is required' }, 400);
@@ -119,6 +130,10 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     const mediainfoPath = body.mediainfoPath ?? '';
     const controller = new AbortController();
     let registeredId: string | null = null;
+    // Sub-fix B: resolve a promise the moment onStart fires so we capture
+    // registeredId without relying on a hardcoded sleep.
+    let onStartResolve: () => void;
+    const onStartFired = new Promise<void>((res) => { onStartResolve = res; });
     const promise = runScan({
       db: opts.db,
       driveId: drive.id,
@@ -132,6 +147,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       onStart: (scanId) => {
         registeredId = scanId;
         activeScans.set(scanId, controller);
+        onStartResolve();
       },
     });
     promise
@@ -149,12 +165,9 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       .finally(() => {
         if (registeredId) activeScans.delete(registeredId);
       });
-    await new Promise((r) => setTimeout(r, 50));
-    const recentRow = opts.db
-      .prepare(`SELECT id FROM scans WHERE drive_id = ? ORDER BY started_at DESC LIMIT 1`)
-      .get(drive.id) as { id: string } | undefined;
-    const recent = recentRow ? scans.findById(recentRow.id) : null;
-    return c.json({ scan: recent }, 201);
+    await onStartFired;
+    const scan = scans.findById(registeredId!);
+    return c.json({ scan }, 201);
   });
 
   app.get('/api/scans', (c) => {
@@ -310,6 +323,9 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       operations: DedupeOperation[];
       driveRoots?: Record<string, string>;
     };
+    if (!Array.isArray(body.operations)) {
+      return c.json({ error: 'operations must be an array' }, 400);
+    }
     const merged = mergeDriveRoots(drives, body.driveRoots ?? {});
     const result = await applyDedupe({
       db: opts.db,
@@ -349,6 +365,9 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       quarantineIds: number[];
       driveRoots?: Record<string, string>;
     };
+    if (!Array.isArray(body.quarantineIds)) {
+      return c.json({ error: 'quarantineIds must be an array' }, 400);
+    }
     const driveRoots = mergeDriveRoots(drives, body.driveRoots ?? {});
     const rootLookup = (driveId: string): string | undefined => driveRoots.get(driveId);
     const errors: string[] = [];
@@ -531,6 +550,9 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       operations: PlannedOperation[];
       driveRoots?: Record<string, string>;
     };
+    if (!Array.isArray(body.operations)) {
+      return c.json({ error: 'operations must be an array' }, 400);
+    }
     try {
       const result = await autoApply({
         db: opts.db,
@@ -562,6 +584,9 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       dryRun?: boolean;
       removeEmptySourceDirs?: boolean;
     };
+    if (!Array.isArray(body.operations)) {
+      return c.json({ error: 'operations must be an array' }, 400);
+    }
     try {
       const result = await applyApprovedBatch({
         db: opts.db,
