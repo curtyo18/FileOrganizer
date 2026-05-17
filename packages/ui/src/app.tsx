@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { Router, Route } from 'preact-router';
 import type { DriveRecord, ScanRecord } from '@fileorganizer/shared';
 import { Sidebar } from './components/sidebar.js';
@@ -22,6 +22,9 @@ function pathToSection(path: string): string {
   return seg;
 }
 
+// Number of consecutive reloadGlobal failures before the offline indicator appears.
+const OFFLINE_THRESHOLD = 3;
+
 export function App() {
   useKeyboardShortcuts(defaultShortcuts());
   const api = defaultApiClient();
@@ -30,12 +33,30 @@ export function App() {
   const [scans, setScans] = useState<ScanRecord[]>([]);
   const [ruleCount, setRuleCount] = useState<number>(0);
   const [roleCount, setRoleCount] = useState<number>(0);
+  const [backendReachable, setBackendReachable] = useState<boolean>(true);
+  const consecutiveFailures = useRef(0);
 
   const reloadGlobal = () => {
-    api.listDrives().then(setDrives).catch(() => {});
-    api.listScans().then((s) => setScans(s as ScanRecord[])).catch(() => {});
-    api.listRules().then((rs) => setRuleCount(rs.length)).catch(() => {});
-    api.listRoles().then((rs) => setRoleCount(rs.length)).catch(() => {});
+    Promise.all([
+      api.listDrives(),
+      api.listScans(),
+      api.listRules(),
+      api.listRoles(),
+    ])
+      .then(([d, s, rs, ro]) => {
+        setDrives(d);
+        setScans(s as ScanRecord[]);
+        setRuleCount(rs.length);
+        setRoleCount(ro.length);
+        consecutiveFailures.current = 0;
+        if (!backendReachable) setBackendReachable(true);
+      })
+      .catch(() => {
+        consecutiveFailures.current += 1;
+        if (consecutiveFailures.current >= OFFLINE_THRESHOLD) {
+          setBackendReachable(false);
+        }
+      });
   };
 
   useEffect(() => {
@@ -56,7 +77,7 @@ export function App() {
         roleCount={roleCount}
       />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
-        <TopBar section={section} drives={drives} />
+        <TopBar section={section} drives={drives} backendReachable={backendReachable} />
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
           <Router onChange={(e) => setSection(pathToSection(e.url))}>
             <Route path="/" component={Dashboard} />

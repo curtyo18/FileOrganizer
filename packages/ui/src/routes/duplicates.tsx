@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import type { RoutableProps } from 'preact-router';
 import type { DriveRecord } from '@fileorganizer/shared';
 import {
@@ -56,16 +56,27 @@ export function Duplicates(_props: DuplicatesProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const loadingRef = useRef(false);
   const initialLoadRef = useRef(false);
+  // Each loadPage call gets its own AbortController. When a new call starts,
+  // the previous in-flight request is aborted so stale responses never overwrite
+  // state from a newer minSize filter selection.
+  const abortRef = useRef<AbortController | null>(null);
 
-  const loadPage = async (offset: number, reset: boolean) => {
-    if (loadingRef.current) return;
+  const loadPage = useCallback(async (offset: number, reset: boolean) => {
+    if (!reset && loadingRef.current) return;
+    // Abort any in-flight request before starting a new one.
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     loadingRef.current = true;
     setLoading(true);
     try {
       const [d, plan] = await Promise.all([
         offset === 0 ? api.listDrives() : Promise.resolve(null),
-        api.listDuplicates({ minSize, limit: PAGE_SIZE, offset }),
+        api.listDuplicates({ minSize, limit: PAGE_SIZE, offset, signal: controller.signal }),
       ]);
+      // Belt-and-suspenders: if aborted after the await, don't touch state.
+      if (controller.signal.aborted) return;
       if (d) setDrives(d);
       if (reset) {
         setGroups(plan.groups);
@@ -84,17 +95,19 @@ export function Duplicates(_props: DuplicatesProps) {
       setTotal(plan.total);
       setHasMore(plan.hasMore);
     } catch (e) {
+      // AbortError is expected when a newer loadPage call supersedes this one.
+      if ((e as Error).name === 'AbortError') return;
       setError((e as Error).message);
     } finally {
       loadingRef.current = false;
       setLoading(false);
     }
-  };
+  }, [minSize]);
 
   useEffect(() => {
     initialLoadRef.current = true;
-    loadPage(0, true);
-  }, [minSize]);
+    void loadPage(0, true);
+  }, [loadPage]);
 
   const driveById = new Map(drives.map((d) => [d.id, d]));
 
@@ -128,6 +141,7 @@ export function Duplicates(_props: DuplicatesProps) {
     if (dist < 240) {
       void loadPage(groups.length, false);
     }
+
   };
 
   const onApprove = async () => {
