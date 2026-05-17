@@ -83,6 +83,13 @@ export class ScansRepo {
     return row ? toRecord(row) : null;
   }
 
+  hasRunning(driveId: string): boolean {
+    const row = this.db
+      .prepare(`SELECT 1 FROM scans WHERE drive_id = ? AND status = 'running' LIMIT 1`)
+      .get(driveId) as { 1: number } | undefined;
+    return row !== undefined;
+  }
+
   list(opts: { driveId?: string; limit?: number } = {}): ScanRecord[] {
     const limit = opts.limit ?? 100;
     const rows = (opts.driveId

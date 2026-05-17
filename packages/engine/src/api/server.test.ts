@@ -91,6 +91,49 @@ describe('API server scans endpoint', () => {
     expect(res.status).toBe(404);
   });
 
+  it('rejects a second concurrent scan on the same driveId with 409', async () => {
+    // Use large files so the first scan is still running when the second POST fires.
+    // The idle profile sleeps between hash chunks (5 ms/chunk at 256 KB chunks), so
+    // 50 files × ~600 KB each gives roughly 50 × 3 × 5 ms = 750 ms of processing
+    // time — enough headroom to fire the second request before the first finishes.
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    const dataDir = join(dir, 'concurrent-data');
+    mkdirSync(dataDir, { recursive: true });
+    const payload = Buffer.alloc(600 * 1024, 'x');
+    for (let i = 0; i < 50; i += 1) {
+      writeFileSync(join(dataDir, `f${String(i).padStart(3, '0')}.jpg`), payload);
+    }
+
+    // Fire scan A — expect 201 and note the driveId.
+    const postA = await fetch(`http://127.0.0.1:${handle.port}/api/scans`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rootPath: dataDir, profile: 'idle' }),
+    });
+    expect(postA.status).toBe(201);
+    const { scan: scanA } = (await postA.json()) as { scan: { id: string; driveId: string } };
+    const driveId = scanA.driveId;
+
+    // Fire scan B immediately — the same rootPath resolves to the same driveId.
+    const postB = await fetch(`http://127.0.0.1:${handle.port}/api/scans`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rootPath: dataDir, profile: 'idle' }),
+    });
+    expect(postB.status).toBe(409);
+    const bodyB = (await postB.json()) as { error: string; driveId: string };
+    expect(bodyB.error).toBe('scan-already-running');
+    expect(bodyB.driveId).toBe(driveId);
+
+    // Let scan A finish so the afterEach cleanup is clean.
+    for (let i = 0; i < 200; i += 1) {
+      const got = await fetch(`http://127.0.0.1:${handle.port}/api/scans/${scanA.id}`);
+      const body = (await got.json()) as { scan: { status: string } };
+      if (body.scan.status === 'completed' || body.scan.status === 'cancelled') break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  });
+
   it('starts a scan via POST /api/scans and reaches completion', async () => {
     const { mkdirSync, writeFileSync } = await import('node:fs');
     const dataDir = join(dir, 'data');
