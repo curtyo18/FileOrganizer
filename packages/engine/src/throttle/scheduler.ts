@@ -1,9 +1,9 @@
 import type { ThrottleProfileName } from '@fileorganizer/shared';
-import type { ThrottleManager } from './manager.js';
+import type { ThrottleManager, ThrottleManagerRef } from './manager.js';
 import type { EventBus } from '../api/events.js';
 
 export interface SchedulerOptions {
-  manager: ThrottleManager;
+  manager: ThrottleManager | ThrottleManagerRef;
   events: EventBus;
   intervalMs: number;
 }

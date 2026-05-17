@@ -1832,3 +1832,95 @@ describe('preview endpoint', () => {
     expect(res.status).toBe(403);
   });
 });
+
+describe('ThrottleManagerRef singleton: mid-scan profile change', () => {
+  // Verifies that when onSettingsChanged fires and replaces the inner
+  // ThrottleManager via ref.replace(), in-flight scans observe the new
+  // profile on subsequent chunk reads (spy-based, not timing-based).
+
+  it('in-flight scan observes the new profile after replace() is called', async () => {
+    const { vi } = await import('vitest');
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    const { ThrottleManager, ThrottleManagerRef } = await import('../throttle/manager.js');
+    const { defaultThrottleProfiles } = await import('@fileorganizer/shared');
+
+    const localDir = mkdtempSync(join(tmpdir(), 'fileorg-singleton-'));
+    const localDb = openCatalog(join(localDir, 'cat.db'));
+    migrate(localDb);
+
+    const profiles = defaultThrottleProfiles(2);
+
+    // Initial manager: 'idle' profile (has a small but non-zero interChunkSleepMs)
+    const initialManager = new ThrottleManager(profiles, 'idle', []);
+    const throttleRef = new ThrottleManagerRef(initialManager);
+
+    // Spy on the ref's current() to capture every profile name the scan reads
+    const observedProfiles: string[] = [];
+    const originalCurrent = throttleRef.current.bind(throttleRef);
+    vi.spyOn(throttleRef, 'current').mockImplementation(() => {
+      const p = originalCurrent();
+      observedProfiles.push(p.name);
+      return p;
+    });
+
+    let onSettingsChangedFn: ((s: unknown) => void) | undefined;
+    const serverHandle = await createServer({
+      db: localDb,
+      port: 0,
+      hostname: '127.0.0.1',
+      throttle: throttleRef,
+      onSettingsChanged: (s) => { onSettingsChangedFn?.(s); },
+    });
+
+    try {
+      // Create enough files that the scan has to hash multiple files, giving us
+      // time to replace the manager between current() calls. 20 small .jpg files
+      // each with 3-chunk reads is more than enough for the spy to record a mix.
+      const dataDir = join(localDir, 'data');
+      mkdirSync(dataDir, { recursive: true });
+      for (let i = 0; i < 20; i += 1) {
+        // ~600 KB per file → multiple chunks per file at 256 KB chunk size
+        writeFileSync(join(dataDir, `f${String(i).padStart(3, '0')}.jpg`), Buffer.alloc(600 * 1024, `${i}`));
+      }
+
+      const post = await fetch(`http://127.0.0.1:${serverHandle.port}/api/scans`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ rootPath: dataDir, profile: 'idle' }),
+      });
+      expect(post.status).toBe(201);
+      const { scan } = (await post.json()) as { scan: { id: string } };
+
+      // Wait a brief moment so at least one current() call happens before swap
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Swap to 'full-send': zero interChunkSleepMs, different name
+      const fullSendManager = new ThrottleManager(profiles, 'full-send', []);
+      throttleRef.replace(fullSendManager);
+
+      // Wait for scan to complete
+      for (let i = 0; i < 200; i += 1) {
+        const got = await fetch(`http://127.0.0.1:${serverHandle.port}/api/scans/${scan.id}`);
+        const body = (await got.json()) as { scan: { status: string } };
+        if (body.scan.status === 'completed' || body.scan.status === 'cancelled') break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+
+      // The spy must have observed 'idle' before the swap and 'full-send' after.
+      // Both must appear in the recorded sequence.
+      expect(observedProfiles).toContain('idle');
+      expect(observedProfiles).toContain('full-send');
+
+      // The sequence must show 'idle' appearing before 'full-send'
+      const firstIdleIdx = observedProfiles.indexOf('idle');
+      const firstFullSendIdx = observedProfiles.indexOf('full-send');
+      expect(firstIdleIdx).toBeGreaterThanOrEqual(0);
+      expect(firstFullSendIdx).toBeGreaterThan(firstIdleIdx);
+    } finally {
+      vi.restoreAllMocks();
+      await serverHandle.close();
+      closeCatalog(localDb);
+      rmSync(localDir, { recursive: true, force: true });
+    }
+  });
+});
