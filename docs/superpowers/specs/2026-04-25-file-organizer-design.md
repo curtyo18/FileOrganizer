@@ -134,7 +134,7 @@ The catalog is the single source of truth. One SQLite file, on a user-chosen dri
 | last_verified_at | DATETIME | |
 | scan_id | TEXT FK | |
 
-**Indexes:** `(sha256)`, unique `(drive_id, path)`, `(category, exif_date)`, `(state)`.
+**Indexes:** `(sha256)`, unique `(drive_id, path)`, `(category, exif_date)`, `(scan_id)`, `(state)` (partial: `WHERE state != 'indexed'` — only non-indexed states are stored, keeping write cost low).
 
 **`rules`** — user-defined organizing rules. Schema in §6.1.
 

@@ -223,3 +223,217 @@ describe('migrate', () => {
     closeCatalog(db);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Migration 0006 — schema hardening
+// ---------------------------------------------------------------------------
+
+function seedBase(db: ReturnType<typeof openCatalog>): void {
+  db.prepare(
+    `INSERT INTO drives (id, volume_serial, label, current_letter, kind, last_seen_at)
+     VALUES ('d1', 'S1', 'D1', 'D', 'local', '2026-01-01T00:00:00Z')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO scans (id, drive_id, started_at, status, throttle_profile)
+     VALUES ('s1', 'd1', '2026-01-01T00:00:00Z', 'completed', 'balanced')`,
+  ).run();
+}
+
+describe('migration 0006', () => {
+  it('adds idx_files_scan_id on files(scan_id)', () => {
+    const db = openCatalog(join(freshDir(), 'catalog.db'));
+    migrate(db);
+    const idx = db
+      .prepare(`SELECT name FROM sqlite_master WHERE type='index' AND name='idx_files_scan_id'`)
+      .get() as { name: string } | undefined;
+    expect(idx).toBeDefined();
+    expect(idx!.name).toBe('idx_files_scan_id');
+    closeCatalog(db);
+  });
+
+  it('idx_files_state is a partial index WHERE state != "indexed"', () => {
+    const db = openCatalog(join(freshDir(), 'catalog.db'));
+    migrate(db);
+    const row = db
+      .prepare(`SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_files_state'`)
+      .get() as { sql: string } | undefined;
+    expect(row).toBeDefined();
+    expect(row!.sql.toLowerCase()).toContain("where state != 'indexed'");
+    closeCatalog(db);
+  });
+
+  it('rejects bogus operations.status via CHECK', () => {
+    const db = openCatalog(join(freshDir(), 'catalog.db'));
+    migrate(db);
+    seedBase(db);
+    db.prepare(
+      `INSERT INTO batches (id, kind, started_at, status) VALUES ('b1', 'move', '2026-01-01T00:00:00Z', 'pending')`,
+    ).run();
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO operations (batch_id, kind, status) VALUES ('b1', 'move', 'banana')`,
+        )
+        .run(),
+    ).toThrow();
+    closeCatalog(db);
+  });
+
+  it('rejects bogus batches.status via CHECK', () => {
+    const db = openCatalog(join(freshDir(), 'catalog.db'));
+    migrate(db);
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO batches (id, kind, started_at, status) VALUES ('bx', 'move', '2026-01-01T00:00:00Z', 'banana')`,
+        )
+        .run(),
+    ).toThrow();
+    closeCatalog(db);
+  });
+
+  it('cascades batch delete to operations', () => {
+    const db = openCatalog(join(freshDir(), 'catalog.db'));
+    migrate(db);
+    seedBase(db);
+    db.prepare(
+      `INSERT INTO batches (id, kind, started_at, status) VALUES ('b1', 'move', '2026-01-01T00:00:00Z', 'pending')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO operations (batch_id, kind, status) VALUES ('b1', 'move', 'pending')`,
+    ).run();
+    expect(
+      (db.prepare(`SELECT COUNT(*) AS n FROM operations WHERE batch_id='b1'`).get() as { n: number }).n,
+    ).toBe(1);
+    db.prepare(`DELETE FROM batches WHERE id='b1'`).run();
+    expect(
+      (db.prepare(`SELECT COUNT(*) AS n FROM operations WHERE batch_id='b1'`).get() as { n: number }).n,
+    ).toBe(0);
+    closeCatalog(db);
+  });
+
+  it('sets file_id NULL on operations when file is deleted', () => {
+    const db = openCatalog(join(freshDir(), 'catalog.db'));
+    migrate(db);
+    seedBase(db);
+    db.prepare(
+      `INSERT INTO batches (id, kind, started_at, status) VALUES ('b1', 'move', '2026-01-01T00:00:00Z', 'pending')`,
+    ).run();
+    const fileId = (
+      db
+        .prepare(
+          `INSERT INTO files (drive_id, path, name, extension, size_bytes, category,
+                              sha256, mtime, ctime, date_source, state, last_verified_at, scan_id)
+           VALUES ('d1', '/x/a.jpg', 'a.jpg', 'jpg', 100, 'image',
+                   'h', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'mtime',
+                   'indexed', '2026-01-01T00:00:00Z', 's1')`,
+        )
+        .run() as { lastInsertRowid: number }
+    ).lastInsertRowid;
+    db.prepare(
+      `INSERT INTO operations (batch_id, kind, file_id, status) VALUES ('b1', 'move', ?, 'pending')`,
+    ).run(fileId);
+    db.prepare(`DELETE FROM files WHERE id=?`).run(fileId);
+    const op = db
+      .prepare(`SELECT file_id FROM operations WHERE batch_id='b1'`)
+      .get() as { file_id: number | null };
+    expect(op.file_id).toBeNull();
+    closeCatalog(db);
+  });
+
+  it('cascades batch delete to quarantine', () => {
+    const db = openCatalog(join(freshDir(), 'catalog.db'));
+    migrate(db);
+    seedBase(db);
+    db.prepare(
+      `INSERT INTO batches (id, kind, started_at, status) VALUES ('b1', 'move', '2026-01-01T00:00:00Z', 'pending')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO quarantine (drive_id, original_path, original_size, original_sha256,
+                               original_mtime, quarantine_path, quarantined_at, batch_id)
+       VALUES ('d1', '/x/a.jpg', 100, 'h', '2026-01-01T00:00:00Z',
+               '/q/a.jpg', '2026-01-01T00:00:00Z', 'b1')`,
+    ).run();
+    expect(
+      (db.prepare(`SELECT COUNT(*) AS n FROM quarantine WHERE batch_id='b1'`).get() as { n: number }).n,
+    ).toBe(1);
+    db.prepare(`DELETE FROM batches WHERE id='b1'`).run();
+    expect(
+      (db.prepare(`SELECT COUNT(*) AS n FROM quarantine WHERE batch_id='b1'`).get() as { n: number }).n,
+    ).toBe(0);
+    closeCatalog(db);
+  });
+
+  it('preserves existing rows through the table rebuild', () => {
+    // Seed rows BEFORE 0006 runs so the INSERT INTO new SELECT * FROM old path
+    // is exercised.  Apply 0001-0005 manually, insert data, then call
+    // migrate() which finds schema_version=5 and applies only 0006.
+    const path = join(freshDir(), 'catalog.db');
+    const db = openCatalog(path);
+
+    for (const f of [
+      '0001_initial.sql', '0002_drive_mount_path.sql', '0003_roles.sql',
+      '0004_scan_cancelled.sql', '0005_empty_dirs.sql',
+    ]) {
+      db.exec(readFileSync(join(MIGRATIONS_DIR, f), 'utf-8'));
+    }
+    const stamp = db.prepare(`INSERT INTO schema_version (version, applied_at) VALUES (?, ?)`);
+    for (const v of [1, 2, 3, 4, 5]) stamp.run(v, new Date().toISOString());
+
+    // Seed a drive, scan, batch, operation, and quarantine row BEFORE 0006.
+    db.prepare(
+      `INSERT INTO drives (id, volume_serial, label, current_letter, kind, last_seen_at)
+       VALUES ('d1', 'S1', 'D1', 'D', 'local', '2026-01-01T00:00:00Z')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO scans (id, drive_id, started_at, status, throttle_profile)
+       VALUES ('s1', 'd1', '2026-01-01T00:00:00Z', 'completed', 'balanced')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO batches (id, kind, started_at, status) VALUES ('b1', 'scan', '2026-01-01T00:00:00Z', 'completed')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO operations (batch_id, kind, status) VALUES ('b1', 'move', 'completed')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO quarantine (drive_id, original_path, original_size, original_sha256,
+                               original_mtime, quarantine_path, quarantined_at, batch_id)
+       VALUES ('d1', '/x/a.jpg', 100, 'h', '2026-01-01T00:00:00Z',
+               '/q/a.jpg', '2026-01-01T00:00:00Z', 'b1')`,
+    ).run();
+
+    // Now run migrate() — only 0006 is pending.
+    expect(() => migrate(db)).not.toThrow();
+    expect(currentSchemaVersion(db)).toBeGreaterThanOrEqual(6);
+
+    // All three rows must have survived the rebuild dance.
+    const batchRow = db.prepare(`SELECT status FROM batches WHERE id='b1'`).get() as
+      | { status: string } | undefined;
+    expect(batchRow?.status).toBe('completed');
+
+    const opCount = (db.prepare(`SELECT COUNT(*) AS n FROM operations WHERE batch_id='b1'`).get() as { n: number }).n;
+    expect(opCount).toBe(1);
+
+    const qCount = (db.prepare(`SELECT COUNT(*) AS n FROM quarantine WHERE batch_id='b1'`).get() as { n: number }).n;
+    expect(qCount).toBe(1);
+
+    closeCatalog(db);
+  });
+
+  it('rebuild dance preserves all existing indexes on batches/operations/quarantine', () => {
+    const db = openCatalog(join(freshDir(), 'catalog.db'));
+    migrate(db);
+    const indexes = db.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type='index' AND tbl_name IN ('batches','operations','quarantine')
+      AND name NOT LIKE 'sqlite_%'
+    `).all() as Array<{ name: string }>;
+    const names = new Set(indexes.map((i) => i.name));
+    expect(names.has('idx_batches_started_at')).toBe(true);
+    expect(names.has('idx_operations_batch')).toBe(true);
+    expect(names.has('idx_operations_status')).toBe(true);
+    expect(names.has('idx_quarantine_drive')).toBe(true);
+    expect(names.has('idx_quarantine_hash')).toBe(true);
+    closeCatalog(db);
+  });
+});

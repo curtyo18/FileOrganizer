@@ -207,6 +207,27 @@ describe('FilesRepo', () => {
     // File under /scan-root-other must NOT be matched via _ wildcard
     expect(repo.findByPath(driveId, '/scan-root-other/photoxa.jpg')!.state).toBe('indexed');
   });
+
+  it('markMissing query plan uses idx_files_scan_id', () => {
+    const repo = new FilesRepo(db);
+    // Plant a file so the table is non-empty and the planner has something to reason about
+    repo.upsertOne(input('/x/a.jpg', 'h1', '2024-01-01T00:00:00.000Z'));
+    const newScanId = 'test-scan-2';
+    db.prepare(
+      `INSERT INTO scans (id, drive_id, started_at, status, throttle_profile) VALUES (?, ?, ?, ?, ?)`,
+    ).run(newScanId, driveId, new Date().toISOString(), 'running', 'balanced');
+    // Force the query planner to use idx_files_scan_id via INDEXED BY.
+    // This verifies the index is correctly formed on files(scan_id) — if it were
+    // missing or on the wrong column the statement would throw "no such index".
+    const sql = `UPDATE files INDEXED BY idx_files_scan_id SET state = 'missing'
+       WHERE drive_id = ? AND scan_id != ? AND state = 'indexed'
+         AND (path LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\')`;
+    const plan = db
+      .prepare(`EXPLAIN QUERY PLAN ${sql}`)
+      .all(driveId, newScanId, '/x/%', '/x\\%') as { detail: string }[];
+    const details = plan.map((r) => r.detail).join(' ');
+    expect(details).toContain('idx_files_scan_id');
+  });
 });
 
 describe('toFileRecord', () => {
