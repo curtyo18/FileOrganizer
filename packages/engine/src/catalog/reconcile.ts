@@ -4,10 +4,9 @@ import { join } from 'node:path';
 import type { Catalog } from './connection.js';
 import { hashFile } from '../scan/hasher.js';
 import { createLogger, defaultWriter } from '../log.js';
+import { QUARANTINE_DIR_NAME } from '../quarantine/quarantine.js';
 
 const log = createLogger({ level: 'info', write: defaultWriter, context: { module: 'reconcile' } });
-
-const QUARANTINE_DIR = '_FileOrganizer_quarantine';
 
 export interface ReconcileResult {
   scanned: number;
@@ -137,7 +136,7 @@ async function detectQuarantineOrphans(db: Catalog): Promise<string[]> {
   for (const drive of drives) {
     if (!drive.mount_path) continue;
 
-    const quarantineRoot = join(drive.mount_path, QUARANTINE_DIR);
+    const quarantineRoot = join(drive.mount_path, QUARANTINE_DIR_NAME);
     if (!existsSync(quarantineRoot)) continue;
 
     let stat;

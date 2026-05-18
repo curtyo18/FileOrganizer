@@ -19,7 +19,7 @@ export interface QuarantineResult {
   quarantinePath: string;
 }
 
-const QUARANTINE_DIR = '_FileOrganizer_quarantine';
+export const QUARANTINE_DIR_NAME = '_FileOrganizer_quarantine';
 
 export function quarantineFile(input: QuarantineFileInput): QuarantineResult {
   const rel = relative(input.driveRoot, input.sourcePath);
@@ -29,7 +29,7 @@ export function quarantineFile(input: QuarantineFileInput): QuarantineResult {
       `source path ${input.sourcePath} is not under drive root ${input.driveRoot}`,
     );
   }
-  const dest = join(input.driveRoot, QUARANTINE_DIR, input.batchId, rel);
+  const dest = join(input.driveRoot, QUARANTINE_DIR_NAME, input.batchId, rel);
   mkdirSync(dirname(dest), { recursive: true });
   if (existsSync(dest)) {
     throw new QuarantineError(

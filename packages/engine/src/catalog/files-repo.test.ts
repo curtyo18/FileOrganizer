@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { openCatalog, closeCatalog, type Catalog } from './connection.js';
 import { migrate } from './migrate.js';
 import { DriveRepo } from '../drives/repo.js';
-import { FilesRepo, type UpsertFileInput } from './files-repo.js';
+import { FilesRepo, toFileRecord, type UpsertFileInput } from './files-repo.js';
 
 let dir: string;
 let db: Catalog;
@@ -206,5 +206,86 @@ describe('FilesRepo', () => {
     expect(repo.findByPath(driveId, '/scan-root_a/photo_a.jpg')!.state).toBe('missing');
     // File under /scan-root-other must NOT be matched via _ wildcard
     expect(repo.findByPath(driveId, '/scan-root-other/photoxa.jpg')!.state).toBe('indexed');
+  });
+});
+
+describe('toFileRecord', () => {
+  it('maps all 19 fields from a sqlite row, coercing nullables to null', () => {
+    // Full row with all non-null values
+    const row: Record<string, unknown> = {
+      id: 42,
+      drive_id: 'drive-1',
+      path: '/photos/img.jpg',
+      name: 'img.jpg',
+      extension: 'jpg',
+      size_bytes: 1024,
+      category: 'image',
+      sha256: 'abc123',
+      mtime: '2024-03-01T00:00:00.000Z',
+      ctime: '2024-03-01T00:00:00.000Z',
+      exif_date: '2024-02-15T10:00:00.000Z',
+      date_source: 'exif',
+      width: 1920,
+      height: 1080,
+      duration_seconds: 30.5,
+      ntfs_file_id: 'ntfs-id-1',
+      state: 'indexed',
+      last_verified_at: '2024-03-01T12:00:00.000Z',
+      scan_id: 'scan-abc',
+    };
+
+    const rec = toFileRecord(row);
+
+    expect(rec.id).toBe(42);
+    expect(rec.driveId).toBe('drive-1');
+    expect(rec.path).toBe('/photos/img.jpg');
+    expect(rec.name).toBe('img.jpg');
+    expect(rec.extension).toBe('jpg');
+    expect(rec.sizeBytes).toBe(1024);
+    expect(rec.category).toBe('image');
+    expect(rec.sha256).toBe('abc123');
+    expect(rec.mtime).toBe('2024-03-01T00:00:00.000Z');
+    expect(rec.ctime).toBe('2024-03-01T00:00:00.000Z');
+    expect(rec.exifDate).toBe('2024-02-15T10:00:00.000Z');
+    expect(rec.dateSource).toBe('exif');
+    expect(rec.width).toBe(1920);
+    expect(rec.height).toBe(1080);
+    expect(rec.durationSeconds).toBe(30.5);
+    expect(rec.ntfsFileId).toBe('ntfs-id-1');
+    expect(rec.state).toBe('indexed');
+    expect(rec.lastVerifiedAt).toBe('2024-03-01T12:00:00.000Z');
+    expect(rec.scanId).toBe('scan-abc');
+  });
+
+  it('coerces nullable fields to null when the row has null values', () => {
+    const row: Record<string, unknown> = {
+      id: 1,
+      drive_id: 'd',
+      path: '/f.mp4',
+      name: 'f.mp4',
+      extension: 'mp4',
+      size_bytes: 500,
+      category: 'video',
+      sha256: 'def456',
+      mtime: '2024-01-01T00:00:00.000Z',
+      ctime: '2024-01-01T00:00:00.000Z',
+      exif_date: null,
+      date_source: 'mtime',
+      width: null,
+      height: null,
+      duration_seconds: null,
+      ntfs_file_id: null,
+      state: 'indexed',
+      last_verified_at: '2024-01-01T00:00:00.000Z',
+      scan_id: 'scan-xyz',
+    };
+
+    const rec = toFileRecord(row);
+
+    expect(rec.exifDate).toBeNull();
+    expect(rec.width).toBeNull();
+    expect(rec.height).toBeNull();
+    expect(rec.durationSeconds).toBeNull();
+    expect(rec.ntfsFileId).toBeNull();
   });
 });

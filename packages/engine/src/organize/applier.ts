@@ -9,8 +9,7 @@ import { hashFile } from '../scan/hasher.js';
 import { moveCrossDrive } from './move-cross-drive.js';
 import { moveSameDrive, type MoveOutcome } from './move-same-drive.js';
 import type { PlannedOperation } from './planner.js';
-
-const QUARANTINE_DIR_NAME = '_FileOrganizer_quarantine';
+import { QUARANTINE_DIR_NAME } from '../quarantine/quarantine.js';
 
 const FREE_SPACE_SAFETY_FRACTION = 0.05;
 

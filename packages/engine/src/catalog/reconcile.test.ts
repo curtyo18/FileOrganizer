@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { openCatalog, closeCatalog, type Catalog } from './connection.js';
 import { migrate } from './migrate.js';
 import { reconcileOnStartup } from './reconcile.js';
+import { QUARANTINE_DIR_NAME } from '../quarantine/quarantine.js';
 
 const sha = (s: string): string => createHash('sha256').update(s).digest('hex');
 
@@ -199,8 +200,6 @@ describe('reconcileOnStartup – atomicity', () => {
 });
 
 describe('reconcileOnStartup – quarantine orphan detection', () => {
-  const QUARANTINE_DIR = '_FileOrganizer_quarantine';
-
   beforeEach(() => {
     // Insert a drive with a real mount_path pointing into our temp dir
     db.prepare(
@@ -217,8 +216,8 @@ describe('reconcileOnStartup – quarantine orphan detection', () => {
   it('detects a quarantine orphan – file on disk with no quarantine row', async () => {
     // Simulate a crash after renameSync but before INSERT INTO quarantine:
     // create the file under the quarantine folder without a DB row
-    const orphanPath = join(dir, QUARANTINE_DIR, 'batchA', 'photos', 'img.jpg');
-    mkdirSync(join(dir, QUARANTINE_DIR, 'batchA', 'photos'), { recursive: true });
+    const orphanPath = join(dir, QUARANTINE_DIR_NAME, 'batchA', 'photos', 'img.jpg');
+    mkdirSync(join(dir, QUARANTINE_DIR_NAME, 'batchA', 'photos'), { recursive: true });
     writeFileSync(orphanPath, 'orphan-content');
 
     // No quarantine row inserted — DB has no record of this file
@@ -233,8 +232,8 @@ describe('reconcileOnStartup – quarantine orphan detection', () => {
 
   it('does NOT classify a legitimately-present quarantine file as an orphan', async () => {
     // Create the file under the quarantine folder
-    const quarantinePath = join(dir, QUARANTINE_DIR, 'batchA', 'docs', 'report.pdf');
-    mkdirSync(join(dir, QUARANTINE_DIR, 'batchA', 'docs'), { recursive: true });
+    const quarantinePath = join(dir, QUARANTINE_DIR_NAME, 'batchA', 'docs', 'report.pdf');
+    mkdirSync(join(dir, QUARANTINE_DIR_NAME, 'batchA', 'docs'), { recursive: true });
     writeFileSync(quarantinePath, 'legit-content');
 
     // Insert a matching quarantine row
