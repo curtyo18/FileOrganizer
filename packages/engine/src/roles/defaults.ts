@@ -1,4 +1,5 @@
 import type { Catalog } from '../catalog/connection.js';
+import { DEFAULT_FILL_THRESHOLD_PERCENT } from '@fileorganizer/shared';
 import { RolesRepo } from './repo.js';
 
 export const DEFAULT_ROLE_NAMES = [
@@ -6,8 +7,6 @@ export const DEFAULT_ROLE_NAMES = [
   'active-documents',
   'document-archive',
 ] as const;
-
-const DEFAULT_FILL_THRESHOLD_PERCENT = 90;
 
 export function seedDefaultRoles(db: Catalog): number {
   const repo = new RolesRepo(db);

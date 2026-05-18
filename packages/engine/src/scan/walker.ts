@@ -50,7 +50,7 @@ async function* walkOne(
   visited: Set<string>,
 ): AsyncGenerator<WalkEntry, number, void> {
   if (opts.signal?.aborted) return 0;
-  let entries;
+  let entries: import('node:fs').Dirent[];
   try {
     entries = await readdir(dir, { withFileTypes: true });
   } catch {
@@ -75,7 +75,7 @@ async function* walkOne(
     if (isDir || isSym) {
       // For symlinks, verify the target is a directory before descending.
       if (isSym && !isDir) {
-        let targetStat;
+        let targetStat: Awaited<ReturnType<typeof stat>>;
         try {
           targetStat = await stat(childPath); // stat follows symlinks
         } catch {
@@ -133,9 +133,9 @@ async function* walkOne(
     } else if (entry.isFile()) {
       const ext = extname(childName).slice(1).toLowerCase();
       if (!opts.extensions.has(ext)) continue;
-      let s;
+      let fileStat: Awaited<ReturnType<typeof stat>>;
       try {
-        s = await stat(childPath);
+        fileStat = await stat(childPath);
       } catch {
         continue;
       }
@@ -143,9 +143,9 @@ async function* walkOne(
         path: childPath,
         name: basename(childPath),
         extension: ext,
-        sizeBytes: s.size,
-        mtime: s.mtime.toISOString(),
-        ctime: s.ctime.toISOString(),
+        sizeBytes: fileStat.size,
+        mtime: fileStat.mtime.toISOString(),
+        ctime: fileStat.ctime.toISOString(),
       };
       yieldedCount += 1;
     }

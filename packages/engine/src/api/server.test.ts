@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openCatalog, closeCatalog, type Catalog } from '../catalog/connection.js';
 import { migrate } from '../catalog/migrate.js';
+import { DEFAULT_FILL_THRESHOLD_PERCENT } from '@fileorganizer/shared';
 import { createServer, type ServerHandle } from './server.js';
 
 let dir: string;
@@ -490,7 +491,7 @@ describe('roles endpoints', () => {
       body: JSON.stringify({
         name: 'media-archive',
         drivePriority: [d1, d2],
-        fillThresholdPercent: 90,
+        fillThresholdPercent: DEFAULT_FILL_THRESHOLD_PERCENT,
       }),
     });
     expect(create.status).toBe(201);
@@ -516,7 +517,7 @@ describe('roles endpoints', () => {
       role: { drivePriority: string[]; fillThresholdPercent: number };
     };
     expect(reordered.role.drivePriority).toEqual([d2, d1]);
-    expect(reordered.role.fillThresholdPercent).toBe(90);
+    expect(reordered.role.fillThresholdPercent).toBe(DEFAULT_FILL_THRESHOLD_PERCENT);
 
     const updateThreshold = await fetch(`${base}/media-archive`, {
       method: 'PUT',
@@ -557,7 +558,7 @@ describe('roles endpoints', () => {
       body: JSON.stringify({
         name: 'dup',
         drivePriority: [driveId],
-        fillThresholdPercent: 90,
+        fillThresholdPercent: DEFAULT_FILL_THRESHOLD_PERCENT,
       }),
     });
     expect(first.status).toBe(201);
@@ -568,7 +569,7 @@ describe('roles endpoints', () => {
       body: JSON.stringify({
         name: 'dup',
         drivePriority: [driveId],
-        fillThresholdPercent: 90,
+        fillThresholdPercent: DEFAULT_FILL_THRESHOLD_PERCENT,
       }),
     });
     expect(dup.status).toBe(409);
@@ -579,7 +580,7 @@ describe('roles endpoints', () => {
       body: JSON.stringify({
         name: 'has-bad-drive',
         drivePriority: ['ghost-drive'],
-        fillThresholdPercent: 90,
+        fillThresholdPercent: DEFAULT_FILL_THRESHOLD_PERCENT,
       }),
     });
     expect(bad.status).toBe(400);

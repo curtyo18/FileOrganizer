@@ -7,6 +7,8 @@ export type CollisionDecision =
   | { kind: 'suffix'; path: string }
   | { kind: 'same-content'; path: string };
 
+// 1 000 attempts before giving up: avoids an infinite loop if a destination
+// directory is already packed with identically-named files.
 const MAX_SUFFIX_ATTEMPTS = 1000;
 
 export async function resolveCollision(

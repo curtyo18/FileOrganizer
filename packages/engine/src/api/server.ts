@@ -47,6 +47,9 @@ export interface ServerHandle {
   close(): Promise<void>;
 }
 
+const COPY_CHUNK_BYTES = 1024 * 1024;
+const CACHE_CONTROL_MAX_AGE = 'max-age=300';
+
 export async function createServer(opts: CreateServerOptions): Promise<ServerHandle> {
   const app = new Hono();
   const events = new EventBus();
@@ -315,7 +318,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       return new Response(webStream, {
         headers: {
           'content-type': 'image/jpeg',
-          'cache-control': 'max-age=300',
+          'cache-control': CACHE_CONTROL_MAX_AGE,
         },
       });
     } catch (err) {
@@ -573,7 +576,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
         db: opts.db,
         operations: body.operations,
         driveRoots: mergeDriveRoots(drives, body.driveRoots ?? {}),
-        chunkBytes: 1024 * 1024,
+        chunkBytes: COPY_CHUNK_BYTES,
       });
       if (result.autoBatchId) {
         events.publish({
@@ -608,7 +611,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
         description: body.description,
         operations: body.operations,
         driveRoots: mergeDriveRoots(drives, body.driveRoots ?? {}),
-        chunkBytes: 1024 * 1024,
+        chunkBytes: COPY_CHUNK_BYTES,
         dryRun: body.dryRun === true,
         removeEmptySourceDirs: body.removeEmptySourceDirs === true,
       });
@@ -654,7 +657,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
         description: body.description,
         operations,
         driveRoots,
-        chunkBytes: 1024 * 1024,
+        chunkBytes: COPY_CHUNK_BYTES,
         dryRun: body.dryRun === true,
         removeEmptySourceDirs: body.removeEmptySourceDirs === true,
       });

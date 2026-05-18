@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { DriveRecord, RoleDefinition } from '@fileorganizer/shared';
+import { DEFAULT_FILL_THRESHOLD_PERCENT } from '@fileorganizer/shared';
 import { resolveRole } from './role-resolver.js';
 
 function makeDrive(over: Partial<DriveRecord> & { id: string }): DriveRecord {
@@ -22,7 +23,7 @@ function makeRole(over: Partial<RoleDefinition> = {}): RoleDefinition {
   return {
     name: 'media-archive',
     drivePriority: ['d1', 'd2'],
-    fillThresholdPercent: 90,
+    fillThresholdPercent: DEFAULT_FILL_THRESHOLD_PERCENT,
     ...over,
   };
 }
@@ -43,7 +44,7 @@ describe('resolveRole', () => {
       ['d1', makeDrive({ id: 'd1', totalBytes: 100, freeBytes: 5 })],
       ['d2', makeDrive({ id: 'd2' })],
     ]);
-    const result = resolveRole({ role: makeRole({ fillThresholdPercent: 90 }), drives });
+    const result = resolveRole({ role: makeRole({ fillThresholdPercent: DEFAULT_FILL_THRESHOLD_PERCENT }), drives });
     expect(result.driveId).toBe('d2');
   });
 
@@ -52,7 +53,7 @@ describe('resolveRole', () => {
       ['d1', makeDrive({ id: 'd1', totalBytes: 100, freeBytes: 5 })],
       ['d2', makeDrive({ id: 'd2', totalBytes: 100, freeBytes: 2 })],
     ]);
-    const result = resolveRole({ role: makeRole({ fillThresholdPercent: 90 }), drives });
+    const result = resolveRole({ role: makeRole({ fillThresholdPercent: DEFAULT_FILL_THRESHOLD_PERCENT }), drives });
     expect(result.driveId).toBeNull();
     expect(result.reason).toContain('media-archive');
   });

@@ -210,11 +210,18 @@ async function reverseCrossDriveMove(
       } catch (catalogErr) {
         // A secondary DB failure must not mask the original unlink error; log and
         // continue so the outer throw surfaces the real cause to the caller.
-        console.error('undo-catalog-update-failed', {
-          op_id: op.id,
-          file_id: op.fileId,
-          error: (catalogErr as Error).message,
-        });
+        // NOTE: no structured logger is threaded through UndoOptions yet; emitting
+        // in log.ts JSON shape so it parses consistently with the rest of the engine.
+        process.stderr.write(
+          JSON.stringify({
+            ts: new Date().toISOString(),
+            level: 'error',
+            msg: 'undo-catalog-update-failed',
+            op_id: op.id,
+            file_id: op.fileId,
+            error: (catalogErr as Error).message,
+          }) + '\n',
+        );
       }
     } catch (rollbackErr) {
       throw new Error(

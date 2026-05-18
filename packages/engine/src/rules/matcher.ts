@@ -2,26 +2,26 @@ import picomatch from 'picomatch';
 import type { FileRecord, Rule } from '@fileorganizer/shared';
 
 export function matches(file: FileRecord, rule: Rule): boolean {
-  const m = rule.match;
+  const match = rule.match;
 
-  if (m.category && !m.category.includes(file.category)) return false;
+  if (match.category && !match.category.includes(file.category)) return false;
 
   const fileDate = file.exifDate ?? file.mtime;
-  if (m.dateBefore && fileDate >= m.dateBefore) return false;
-  if (m.dateAfter && fileDate <= m.dateAfter) return false;
+  if (match.dateBefore && fileDate >= match.dateBefore) return false;
+  if (match.dateAfter && fileDate <= match.dateAfter) return false;
 
-  if (m.dateSourceMin === 'exif' && file.dateSource !== 'exif') return false;
-  if (m.dateSourceMin === 'mtime' && file.dateSource === 'none') return false;
+  if (match.dateSourceMin === 'exif' && file.dateSource !== 'exif') return false;
+  if (match.dateSourceMin === 'mtime' && file.dateSource === 'none') return false;
 
-  if (m.minSizeBytes != null && file.sizeBytes < m.minSizeBytes) return false;
-  if (m.maxSizeBytes != null && file.sizeBytes > m.maxSizeBytes) return false;
+  if (match.minSizeBytes != null && file.sizeBytes < match.minSizeBytes) return false;
+  if (match.maxSizeBytes != null && file.sizeBytes > match.maxSizeBytes) return false;
 
-  if (m.pathGlob) {
-    const isMatch = picomatch(m.pathGlob, { dot: true });
+  if (match.pathGlob) {
+    const isMatch = picomatch(match.pathGlob, { dot: true });
     if (!isMatch(file.path)) return false;
   }
 
-  if (m.sourceDrives && !m.sourceDrives.includes(file.driveId)) return false;
+  if (match.sourceDrives && !match.sourceDrives.includes(file.driveId)) return false;
 
   return true;
 }

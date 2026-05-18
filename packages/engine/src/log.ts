@@ -26,12 +26,14 @@ export function createLogger(opts: LoggerOptions): Logger {
   const min = LEVEL_ORDER[opts.level];
   const log = (level: LogLevel, msg: string, fields?: Record<string, unknown>) => {
     if (LEVEL_ORDER[level] < min) return;
+    // Spread order: fields and base first so caller-supplied keys cannot
+    // override the canonical ts/level/msg fields.
     const line = JSON.stringify({
+      ...fields,
+      ...base,
       ts: new Date().toISOString(),
       level,
       msg,
-      ...base,
-      ...fields,
     });
     opts.write(line);
   };

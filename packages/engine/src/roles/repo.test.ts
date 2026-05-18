@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openCatalog, closeCatalog, type Catalog } from '../catalog/connection.js';
 import { migrate } from '../catalog/migrate.js';
+import { DEFAULT_FILL_THRESHOLD_PERCENT } from '@fileorganizer/shared';
 import { DriveRepo } from '../drives/repo.js';
 import { RolesRepo } from './repo.js';
 
@@ -47,17 +48,17 @@ describe('RolesRepo', () => {
     const role = repo.create({
       name: 'media-archive',
       drivePriority: [d1, d2],
-      fillThresholdPercent: 90,
+      fillThresholdPercent: DEFAULT_FILL_THRESHOLD_PERCENT,
     });
     expect(role.name).toBe('media-archive');
     expect(role.drivePriority).toEqual([d1, d2]);
-    expect(role.fillThresholdPercent).toBe(90);
+    expect(role.fillThresholdPercent).toBe(DEFAULT_FILL_THRESHOLD_PERCENT);
   });
 
   it('lists roles in stable insertion order and finds by name', () => {
     const repo = new RolesRepo(db);
-    repo.create({ name: 'a', drivePriority: [d1], fillThresholdPercent: 90 });
-    repo.create({ name: 'b', drivePriority: [d2], fillThresholdPercent: 90 });
+    repo.create({ name: 'a', drivePriority: [d1], fillThresholdPercent: DEFAULT_FILL_THRESHOLD_PERCENT });
+    repo.create({ name: 'b', drivePriority: [d2], fillThresholdPercent: DEFAULT_FILL_THRESHOLD_PERCENT });
     expect(repo.list().map((r) => r.name)).toEqual(['a', 'b']);
     expect(repo.findByName('a')).not.toBeNull();
     expect(repo.findByName('missing')).toBeNull();
@@ -65,7 +66,7 @@ describe('RolesRepo', () => {
 
   it('updates priority and threshold and persists', () => {
     const repo = new RolesRepo(db);
-    repo.create({ name: 'r', drivePriority: [d1, d2], fillThresholdPercent: 90 });
+    repo.create({ name: 'r', drivePriority: [d1, d2], fillThresholdPercent: DEFAULT_FILL_THRESHOLD_PERCENT });
     repo.update('r', { drivePriority: [d2, d1], fillThresholdPercent: 80 });
     const r = repo.findByName('r')!;
     expect(r.drivePriority).toEqual([d2, d1]);
@@ -75,15 +76,15 @@ describe('RolesRepo', () => {
   it('rejects roles referencing unknown drive ids', () => {
     const repo = new RolesRepo(db);
     expect(() =>
-      repo.create({ name: 'x', drivePriority: ['nope'], fillThresholdPercent: 90 }),
+      repo.create({ name: 'x', drivePriority: ['nope'], fillThresholdPercent: DEFAULT_FILL_THRESHOLD_PERCENT }),
     ).toThrow(/unknown drive/i);
   });
 
   it('rejects duplicate role names', () => {
     const repo = new RolesRepo(db);
-    repo.create({ name: 'r', drivePriority: [d1], fillThresholdPercent: 90 });
+    repo.create({ name: 'r', drivePriority: [d1], fillThresholdPercent: DEFAULT_FILL_THRESHOLD_PERCENT });
     expect(() =>
-      repo.create({ name: 'r', drivePriority: [d2], fillThresholdPercent: 90 }),
+      repo.create({ name: 'r', drivePriority: [d2], fillThresholdPercent: DEFAULT_FILL_THRESHOLD_PERCENT }),
     ).toThrow(/exists/i);
   });
 
@@ -94,14 +95,14 @@ describe('RolesRepo', () => {
 
   it('deletes a role', () => {
     const repo = new RolesRepo(db);
-    repo.create({ name: 'r', drivePriority: [d1], fillThresholdPercent: 90 });
+    repo.create({ name: 'r', drivePriority: [d1], fillThresholdPercent: DEFAULT_FILL_THRESHOLD_PERCENT });
     repo.delete('r');
     expect(repo.findByName('r')).toBeNull();
   });
 
   it('allows roles with empty drive priority (drives may not be registered yet)', () => {
     const repo = new RolesRepo(db);
-    const role = repo.create({ name: 'pending', drivePriority: [], fillThresholdPercent: 90 });
+    const role = repo.create({ name: 'pending', drivePriority: [], fillThresholdPercent: DEFAULT_FILL_THRESHOLD_PERCENT });
     expect(role.drivePriority).toEqual([]);
   });
 });

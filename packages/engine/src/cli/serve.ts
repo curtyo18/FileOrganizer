@@ -10,6 +10,8 @@ import { createServer } from '../api/server.js';
 import { reconcileOnStartup } from '../catalog/reconcile.js';
 import { Optimizer } from '../catalog/optimizer.js';
 
+const SCHEDULER_INTERVAL_MS = 60_000;
+
 export interface ServeCliOptions {
   pointerPath: string;
   port?: number;
@@ -78,7 +80,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
       scheduler = new ThrottleScheduler({
         manager: throttleRef,
         events: server.events,
-        intervalMs: 60_000,
+        intervalMs: SCHEDULER_INTERVAL_MS,
       });
       scheduler.start();
     },

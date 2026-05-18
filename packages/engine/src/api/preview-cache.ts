@@ -13,6 +13,7 @@ export interface PreviewCacheOptions {
 
 const MAX_CACHE_BYTES = 500 * 1024 * 1024;
 const EVICT_INTERVAL = 100;
+const EVICT_FRACTION = 0.2;
 
 export function previewCacheRoot(catalogDir: string): string {
   return join(catalogDir, 'preview-cache');
@@ -104,7 +105,7 @@ export function evictIfTooBig(catalogDir: string, maxBytes = MAX_CACHE_BYTES): v
   }
   if (total <= maxBytes) return;
   entries.sort((a, b) => a.mtimeMs - b.mtimeMs);
-  const target = Math.max(1, Math.floor(entries.length * 0.2));
+  const target = Math.max(1, Math.floor(entries.length * EVICT_FRACTION));
   for (let i = 0; i < target; i += 1) {
     try {
       unlinkSync(entries[i]!.path);

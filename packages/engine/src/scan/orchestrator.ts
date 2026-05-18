@@ -14,6 +14,10 @@ import {
 } from '@fileorganizer/shared';
 import type { ThrottleManager, ThrottleManagerRef } from '../throttle/manager.js';
 import type { Logger } from '../log.js';
+import { dirname } from 'node:path';
+
+const PROGRESS_INTERVAL_MS = 1000;
+const PROGRESS_FILE_CADENCE = 50;
 
 export interface RunScanOptions {
   db: Catalog;
@@ -60,8 +64,6 @@ export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
   let bytesProcessed = 0;
   let lastDir: string | null = null;
   let lastProgressAt = Date.now();
-  const PROGRESS_INTERVAL_MS = 1000;
-  const PROGRESS_FILE_CADENCE = 50;
   let filesSinceProgress = 0;
 
   let cancelled = false;
@@ -96,7 +98,7 @@ export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
       }
       filesSeen += 1;
       filesSinceProgress += 1;
-      const dirPart = entry.path.slice(0, entry.path.length - entry.name.length);
+      const dirPart = dirname(entry.path);
       const dirChanged = dirPart !== lastDir;
       if (dirChanged) lastDir = dirPart;
       if (
