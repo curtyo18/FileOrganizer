@@ -2169,13 +2169,16 @@ describe('rootPaths confinement — POST /api/scans', () => {
   it('succeeds (201) when all rootPaths are under the registered drive mountPath', async () => {
     const { mkdirSync, writeFileSync } = await import('node:fs');
     const { DriveRepo } = await import('../drives/repo.js');
+    const { detectVolume } = await import('../drives/volume.js');
     const mountPath = join(dir, 'drive-c');
     const subDir = join(mountPath, 'sub');
     mkdirSync(subDir, { recursive: true });
     writeFileSync(join(subDir, 'ok.jpg'), 'ok');
 
+    // Use the real live serial so the volume serial pre-flight check passes.
+    const liveSerial = detectVolume(mountPath).volumeSerial;
     const drive = new DriveRepo(db).upsert({
-      volumeSerial: 'CONF-C',
+      volumeSerial: liveSerial,
       label: 'CONF-C',
       currentLetter: null,
       mountPath,
@@ -2222,5 +2225,44 @@ describe('bodyLimit middleware', () => {
     const json = await res.json() as { error: string; maxSize: number };
     expect(json.error).toBe('request-too-large');
     expect(json.maxSize).toBe(8 * 1024 * 1024);
+  });
+});
+
+describe('POST /api/scans — volume serial mismatch', () => {
+  it('returns 409 with VOLUME_SERIAL_MISMATCH when the stored serial differs from the live drive', async () => {
+    const { mkdirSync } = await import('node:fs');
+    const { DriveRepo } = await import('../drives/repo.js');
+
+    // A real directory the drive claims to be mounted at.
+    // Register with a non-synth fake serial (simulates a Windows volume UniqueId)
+    // so the pre-flight fires.  The live detectVolume returns a synth-* serial
+    // on POSIX, which will never match the fake non-synth one.
+    const mountPath = join(dir, 'stale-drive');
+    mkdirSync(mountPath, { recursive: true });
+
+    const drive = new DriveRepo(db).upsert({
+      volumeSerial: '{12345678-ABCD-EF01-2345-6789ABCDEF01}',
+      label: 'stale',
+      currentLetter: null,
+      mountPath,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1_000_000,
+      freeBytes: 500_000,
+    });
+
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/scans`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        driveId: drive.id,
+        rootPaths: [mountPath],
+        profile: 'idle',
+      }),
+    });
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string; code: string };
+    expect(body.code).toBe('VOLUME_SERIAL_MISMATCH');
   });
 });

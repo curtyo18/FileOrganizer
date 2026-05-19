@@ -2,6 +2,8 @@ import type { Catalog } from '../catalog/connection.js';
 import { FilesRepo } from '../catalog/files-repo.js';
 import { ScansRepo } from '../catalog/scans-repo.js';
 import { EmptyDirsRepo } from '../catalog/empty-dirs-repo.js';
+import { DriveRepo } from '../drives/repo.js';
+import { detectVolume } from '../drives/volume.js';
 import { walk } from './walker.js';
 import { hashFile } from './hasher.js';
 import { extractImageMetadata } from './metadata-image.js';
@@ -11,6 +13,7 @@ import { DEFAULT_EXCLUDED_NAMES } from './exclusions.js';
 import {
   categoryForExtension,
   type CategoryMap,
+  ScanError,
 } from '@fileorganizer/shared';
 import type { ThrottleManager, ThrottleManagerRef } from '../throttle/manager.js';
 import type { Logger } from '../log.js';
@@ -43,6 +46,27 @@ export interface RunScanResult {
 }
 
 export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
+  // Pre-flight: verify the drive's volume serial hasn't changed since registration.
+  // Catches the drive-letter-remapped case where the catalog and physical drive disagree.
+  // Conditions for skipping the check:
+  //   - mountPath is null: drive registered without a known mount point.
+  //   - stored serial starts with 'synth-': a synthetic serial derived from the path.
+  //     Synth serials are path-based (not mount-based) on POSIX and can't reliably
+  //     detect remapping — detectVolume(mountPath) would always produce a different
+  //     synth value than detectVolume(originalPath). Only real OS-issued serials
+  //     (Windows volume UniqueId) support the remapping-detection guarantee.
+  const drive = new DriveRepo(opts.db).findById(opts.driveId);
+  if (!drive) throw new ScanError('DRIVE_NOT_FOUND', `drive ${opts.driveId} not registered`);
+  if (drive.mountPath !== null && !drive.volumeSerial.startsWith('synth-')) {
+    const live = detectVolume(drive.mountPath);
+    if (live.volumeSerial !== drive.volumeSerial) {
+      throw new ScanError(
+        'VOLUME_SERIAL_MISMATCH',
+        `drive ${drive.label} (id=${opts.driveId}) volume serial changed: catalog=${drive.volumeSerial} live=${live.volumeSerial}`,
+      );
+    }
+  }
+
   const filesRepo = new FilesRepo(opts.db);
   const scansRepo = new ScansRepo(opts.db);
   const emptyDirsRepo = new EmptyDirsRepo(opts.db);

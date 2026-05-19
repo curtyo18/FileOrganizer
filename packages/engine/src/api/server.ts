@@ -26,7 +26,7 @@ import { planOrganize, type PlannedOperation } from '../organize/planner.js';
 import { applyApprovedBatch, autoApply } from '../organize/applier.js';
 import { undoBatch } from '../organize/undo.js';
 import { findEmptyDirs, removeEmptyDirs } from '../cleanup/empty-dirs.js';
-import { DriveError, RuleError, type Settings } from '@fileorganizer/shared';
+import { DriveError, RuleError, ScanError, type Settings } from '@fileorganizer/shared';
 import { EventBus } from './events.js';
 
 export interface CreateServerOptions {
@@ -168,6 +168,10 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
         onStartResolve();
       },
     });
+    // Attach background completion handlers.  The .catch here only fires for
+    // errors thrown AFTER onStart (i.e., mid-scan failures).  Pre-start errors
+    // (VOLUME_SERIAL_MISMATCH, DRIVE_NOT_FOUND) are detected via the race below
+    // and returned as synchronous HTTP responses before reaching this .catch.
     promise
       .then((r) => {
         events.publish({
@@ -183,7 +187,16 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       .finally(() => {
         if (registeredId) activeScans.delete(registeredId);
       });
-    await onStartFired;
+    // Race: either onStart fires (normal scan started) or runScan rejects
+    // before inserting a scans row (pre-start failure such as VOLUME_SERIAL_MISMATCH).
+    try {
+      await Promise.race([onStartFired, promise]);
+    } catch (err) {
+      if (err instanceof ScanError && err.code === 'VOLUME_SERIAL_MISMATCH') {
+        return c.json({ error: err.message, code: err.code }, 409);
+      }
+      throw err;
+    }
     const scan = scans.findById(registeredId!);
     return c.json({ scan }, 201);
   });

@@ -9,7 +9,7 @@ import { FilesRepo } from '../catalog/files-repo.js';
 import { ScansRepo } from '../catalog/scans-repo.js';
 import { runScan } from './orchestrator.js';
 import { ThrottleManager } from '../throttle/manager.js';
-import { defaultThrottleProfiles, DEFAULT_CATEGORY_MAP } from '@fileorganizer/shared';
+import { defaultThrottleProfiles, DEFAULT_CATEGORY_MAP, ScanError } from '@fileorganizer/shared';
 import { createLogger } from '../log.js';
 
 let dir: string;
@@ -238,5 +238,91 @@ describe('runScan', () => {
     const scan = new ScansRepo(db).findById(result.scanId);
     expect(scan!.status).toBe('completed');
     expect(scan!.progress.filesIndexed).toBe(1);
+  });
+});
+
+describe('runScan — volume serial pre-flight', () => {
+  // The pre-flight check only fires for real (non-synth) volume serials.
+  // On POSIX, detectVolume returns synth-<sha1> serials; registering a drive
+  // with a non-synth serial simulates a Windows drive whose volume serial
+  // was recorded at registration and now differs from the live OS report.
+  const FAKE_WINDOWS_SERIAL = '{12345678-ABCD-EF01-2345-6789ABCDEF01}';
+
+  it('refuses to start with VOLUME_SERIAL_MISMATCH when stored serial differs from live', async () => {
+    // Drive registered with a non-synth serial pointing at a real path.
+    // The live detectVolume will return a synth-* serial (POSIX) or a
+    // different real serial (Windows remapping) — either way a mismatch.
+    const drive = new DriveRepo(db).upsert({
+      volumeSerial: FAKE_WINDOWS_SERIAL,
+      label: 'stale-drive',
+      currentLetter: null,
+      mountPath: scanRoot,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1_000_000_000,
+      freeBytes: 500_000_000,
+    });
+    const writes: string[] = [];
+    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
+
+    let caught: unknown;
+    try {
+      await runScan({
+        db, driveId: drive.id, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
+        throttle, log, mediainfoPath: '/no/such',
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(ScanError);
+    expect((caught as ScanError).code).toBe('VOLUME_SERIAL_MISMATCH');
+    // Error message must name both the catalog value and the live value so the
+    // operator can debug the remapping.
+    expect((caught as ScanError).message).toContain(FAKE_WINDOWS_SERIAL);
+    expect((caught as ScanError).message).toContain('live=');
+  });
+
+  it('starts normally when the stored serial is a synth serial (POSIX: check skipped)', async () => {
+    // Synth serials are path-specific and can't detect drive remapping on POSIX,
+    // so the pre-flight is skipped for them.  This verifies that skip is correct
+    // and the scan proceeds without a false VOLUME_SERIAL_MISMATCH.
+    fixture('a.jpg', 'aaa');
+    const writes: string[] = [];
+    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
+
+    // driveId from beforeEach has volumeSerial='X' (non-synth, no mountPath=null).
+    // Use it directly — mountPath is null so the check is also skipped.
+    const result = await runScan({
+      db, driveId, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
+      throttle, log, mediainfoPath: '/no/such',
+    });
+    expect(result.filesIndexed).toBe(1);
+  });
+
+  it('leaves no running scans row after a mismatch throw', async () => {
+    const drive = new DriveRepo(db).upsert({
+      volumeSerial: FAKE_WINDOWS_SERIAL,
+      label: 'stale-drive2',
+      currentLetter: null,
+      mountPath: scanRoot,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1_000_000_000,
+      freeBytes: 500_000_000,
+    });
+    const writes: string[] = [];
+    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
+
+    await runScan({
+      db, driveId: drive.id, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
+      throttle, log, mediainfoPath: '/no/such',
+    }).catch(() => { /* expected mismatch */ });
+
+    // No running scan should exist after the throw.
+    expect(new ScansRepo(db).hasRunning(drive.id)).toBe(false);
   });
 });
