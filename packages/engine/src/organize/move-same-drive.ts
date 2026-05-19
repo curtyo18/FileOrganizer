@@ -51,5 +51,8 @@ export async function moveSameDrive(input: MoveSameDriveInput): Promise<MoveOutc
   input.db
     .prepare(`UPDATE files SET path = ?, state = 'moved' WHERE id = ?`)
     .run(finalDestPath, input.fileId);
+  // Atomic rename preserves bytes on POSIX/NTFS, so the catalog's sha256
+  // equals the post-rename file content — no re-hash needed (cross-drive
+  // path re-hashes because pipeline copies may corrupt mid-stream).
   return { kind: 'moved', finalDestPath, postHash: row.sha256, quarantinePath: null };
 }

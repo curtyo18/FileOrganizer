@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { extractImageMetadata } from './metadata-image.js';
 import { buildJpegWithExifDate, buildPlainJpeg } from './__fixtures__/build-fixtures.js';
-import type { Logger } from '../log.js';
+import { makeCapturingLogger } from '../test-helpers/log.js';
 
 
 let dir: string;
@@ -16,19 +16,6 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
-
-function makeLogger(): { logger: Logger; warns: Array<{ msg: string; fields: Record<string, unknown> }> } {
-  const warns: Array<{ msg: string; fields: Record<string, unknown> }> = [];
-  const noop = () => {};
-  const logger: Logger = {
-    debug: noop,
-    info: noop,
-    warn: (msg, fields) => warns.push({ msg, fields: fields ?? {} }),
-    error: noop,
-    child: () => logger,
-  };
-  return { logger, warns };
-}
 
 describe('extractImageMetadata', () => {
   it('returns null exif date for a plain jpeg', async () => {
@@ -48,7 +35,7 @@ describe('extractImageMetadata', () => {
   it('logs warn with metadata-image-error when exifr.parse throws, and returns null metadata', async () => {
     // Pass a path that does not exist — exifr throws ENOENT, which the catch
     // block should log and then return the null fallback.
-    const { logger, warns } = makeLogger();
+    const { logger, warns } = makeCapturingLogger();
     const meta = await extractImageMetadata('/nonexistent/photo.jpg', { log: logger });
     expect(meta).toEqual({ exifDate: null, width: null, height: null });
     expect(warns).toHaveLength(1);

@@ -11,7 +11,6 @@ export interface SchedulerOptions {
 
 export class ThrottleScheduler {
   private timer: ReturnType<typeof setTimeout> | null = null;
-  private lastTickAt: number | null = null;
   private readonly now: () => Date;
 
   constructor(private readonly opts: SchedulerOptions) {
@@ -35,7 +34,6 @@ export class ThrottleScheduler {
   tick(): void {
     const now = this.now();
     this.evaluate(now);
-    this.lastTickAt = now.getTime();
   }
 
   private evaluate(now: Date): void {

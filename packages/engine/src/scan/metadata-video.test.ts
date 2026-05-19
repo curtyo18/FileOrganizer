@@ -4,7 +4,7 @@ import { extractVideoMetadata, parseMediainfoOutput } from './metadata-video.js'
 import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Logger } from '../log.js';
+import { makeCapturingLogger } from '../test-helpers/log.js';
 
 describe('parseMediainfoOutput', () => {
   it('returns null exifDate when no recorded date', () => {
@@ -40,19 +40,6 @@ describe('parseMediainfoOutput', () => {
   });
 });
 
-function makeLogger(): { logger: Logger; warns: Array<{ msg: string; fields: Record<string, unknown> }> } {
-  const warns: Array<{ msg: string; fields: Record<string, unknown> }> = [];
-  const noop = () => {};
-  const logger: Logger = {
-    debug: noop,
-    info: noop,
-    warn: (msg, fields) => warns.push({ msg, fields: fields ?? {} }),
-    error: noop,
-    child: () => logger,
-  };
-  return { logger, warns };
-}
-
 describe('extractVideoMetadata', () => {
   it('returns blank metadata when binary path is missing', async () => {
     const meta = await extractVideoMetadata('/does/not/exist.mp4', { binaryPath: '/no/such/binary' });
@@ -66,7 +53,7 @@ describe('extractVideoMetadata', () => {
     const fakeBinary = join(tmpDir, 'mediainfo-fail.sh');
     writeFileSync(fakeBinary, '#!/bin/sh\nexit 1', { mode: 0o755 });
 
-    const { logger, warns } = makeLogger();
+    const { logger, warns } = makeCapturingLogger();
     try {
       const meta = await extractVideoMetadata('/video/sample.mp4', {
         binaryPath: fakeBinary,
@@ -85,7 +72,7 @@ describe('extractVideoMetadata', () => {
   });
 
   it('logs warn with metadata-video-error (phase parse) when JSON is invalid, and returns null metadata', async () => {
-    const { logger, warns } = makeLogger();
+    const { logger, warns } = makeCapturingLogger();
     const result = parseMediainfoOutput('not-valid-json', {
       log: logger,
       path: '/video/sample.mp4',
