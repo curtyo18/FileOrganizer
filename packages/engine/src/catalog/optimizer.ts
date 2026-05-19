@@ -1,27 +1,37 @@
 import type { Catalog } from './connection.js';
+import { SettingsRepo } from './settings-repo.js';
 
-const KEY = 'lastOptimizedAt';
 const INTERVAL_MS = 24 * 60 * 60 * 1000;
 
+export interface OptimizerOptions {
+  now?: () => number;
+}
+
 export class Optimizer {
-  constructor(private readonly db: Catalog) {}
+  private readonly now: () => number;
+
+  constructor(
+    private readonly db: Catalog,
+    opts: OptimizerOptions = {},
+  ) {
+    this.now = opts.now ?? (() => Date.now());
+  }
 
   shouldRun(): boolean {
-    const row = this.db.prepare(`SELECT value FROM settings WHERE key = ?`).get(KEY) as
-      | { value: string }
-      | undefined;
-    if (!row) return true;
-    const last = Date.parse(row.value);
+    const settings = new SettingsRepo(this.db).load();
+    const { lastOptimizedAt } = settings;
+    if (!lastOptimizedAt) return true;
+    const last = Date.parse(lastOptimizedAt);
     if (Number.isNaN(last)) return true;
-    return Date.now() - last >= INTERVAL_MS;
+    return this.now() - last >= INTERVAL_MS;
   }
 
   runIfDue(): void {
     if (!this.shouldRun()) return;
     this.db.exec(`PRAGMA optimize`);
-    this.db
-      .prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`)
-      .run(KEY, new Date().toISOString());
+    const repo = new SettingsRepo(this.db);
+    const settings = repo.load();
+    repo.save({ ...settings, lastOptimizedAt: new Date(this.now()).toISOString() });
   }
 
   startInterval(intervalMs: number = INTERVAL_MS): NodeJS.Timeout {

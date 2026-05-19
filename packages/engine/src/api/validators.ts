@@ -34,6 +34,7 @@ export const SettingsSchema = z.object({
   recentArchiveCutoffYears: z.number().int().min(0),
   uiPort: z.number().int().min(0).max(65535),
   userExcluded: z.array(z.string()),
+  lastOptimizedAt: z.string().optional(),
 });
 
 // CreateRoleInput schema — mirrors packages/engine/src/roles/repo.ts CreateRoleInput
