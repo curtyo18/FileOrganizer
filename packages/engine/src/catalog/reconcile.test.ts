@@ -1,12 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { openCatalog, closeCatalog, type Catalog } from './connection.js';
 import { migrate } from './migrate.js';
 import { reconcileOnStartup } from './reconcile.js';
 import { QUARANTINE_DIR_NAME } from '../quarantine/quarantine.js';
+import { DriveRepo } from '../drives/repo.js';
+import { FilesRepo } from './files-repo.js';
+import { RulesRepo } from '../rules/repo.js';
+import { applyApprovedBatch } from '../organize/applier.js';
+import type { PlannedOperation } from '../organize/planner.js';
 
 const sha = (s: string): string => createHash('sha256').update(s).digest('hex');
 
@@ -247,5 +252,129 @@ describe('reconcileOnStartup – quarantine orphan detection', () => {
 
     expect(result.quarantineOrphans).toBeDefined();
     expect(result.quarantineOrphans).toHaveLength(0);
+  });
+});
+
+// Helpers shared by the pipeline test below
+function seedDriveRec(db: Catalog, label: string, mountPath: string): string {
+  return new DriveRepo(db).upsert({
+    volumeSerial: `serial-rec-${label}`,
+    label,
+    currentLetter: null,
+    mountPath,
+    kind: 'local',
+    roles: [],
+    totalBytes: 1_000_000,
+    freeBytes: 800_000,
+  }).id;
+}
+
+function seedScanRec(db: Catalog, driveId: string): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO scans (id, drive_id, started_at, status, throttle_profile)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).run('scan-rec-1', driveId, new Date().toISOString(), 'completed', 'balanced');
+}
+
+function seedFileRec(db: Catalog, driveId: string, path: string, content: string): number {
+  mkdirSync(resolve(path, '..'), { recursive: true });
+  writeFileSync(path, content);
+  new FilesRepo(db).upsertOne({
+    driveId,
+    path,
+    name: path.split(/[\\/]/).pop()!,
+    extension: 'jpg',
+    sizeBytes: Buffer.byteLength(content),
+    category: 'image',
+    sha256: createHash('sha256').update(content).digest('hex'),
+    mtime: '2024-01-01T00:00:00.000Z',
+    ctime: '2024-01-01T00:00:00.000Z',
+    exifDate: null,
+    dateSource: 'mtime',
+    width: null,
+    height: null,
+    durationSeconds: null,
+    ntfsFileId: null,
+    state: 'indexed',
+    scanId: 'scan-rec-1',
+  });
+  return (db.prepare(`SELECT id FROM files WHERE path = ?`).get(path) as { id: number }).id;
+}
+
+describe('reconcileOnStartup – post_hash written by production applier', () => {
+  it('reconcile marks a crashed cross-drive copy completed when post_hash is set and dest matches', async () => {
+    // Set up two drives in the same temp dir
+    const srcRoot = join(dir, 'SRC');
+    const dstRoot = join(dir, 'DST');
+    mkdirSync(srcRoot, { recursive: true });
+    mkdirSync(dstRoot, { recursive: true });
+
+    const srcDriveId = seedDriveRec(db, 'SRC', srcRoot);
+    const dstDriveId = seedDriveRec(db, 'DST', dstRoot);
+    seedScanRec(db, srcDriveId);
+
+    const ruleId = new RulesRepo(db).create({
+      name: 'r-rec',
+      priority: 100,
+      match: { category: ['image'] },
+      destinationRole: 'photos',
+      destinationTemplate: 'Photos/{filename}',
+      movePolicy: 'always-review',
+      quarantinePolicy: 'default',
+    }).id;
+
+    const srcPath = join(srcRoot, 'photo.jpg');
+    const dstPath = join(dstRoot, 'Photos', 'photo.jpg');
+    const fileId = seedFileRec(db, srcDriveId, srcPath, 'test-content');
+
+    const applyOp: PlannedOperation = {
+      fileId,
+      ruleId,
+      sourceDriveId: srcDriveId,
+      sourcePath: srcPath,
+      destDriveId: dstDriveId,
+      destPath: dstPath,
+      kind: 'cross-drive-move',
+      estimatedBytes: 12,
+    };
+
+    const applyResult = await applyApprovedBatch({
+      db,
+      description: 'test forward move',
+      operations: [applyOp],
+      driveRoots: new Map([
+        [srcDriveId, srcRoot],
+        [dstDriveId, dstRoot],
+      ]),
+      chunkBytes: 64 * 1024,
+    });
+
+    // Verify the applier wrote post_hash on the operation row
+    const opRow = db
+      .prepare(
+        `SELECT post_hash, quarantine_path FROM operations
+         WHERE batch_id = ? AND kind = 'copy' ORDER BY id DESC LIMIT 1`,
+      )
+      .get(applyResult.batchId) as { post_hash: string | null; quarantine_path: string | null };
+
+    // post_hash must be written (this is what B3 fixes)
+    expect(opRow.post_hash).toBe(createHash('sha256').update('test-content').digest('hex'));
+    // quarantine_path must be recorded so reconcile can walk it
+    expect(opRow.quarantine_path).toBeTruthy();
+
+    // Simulate a crash: force the op back to in-progress
+    db.prepare(`UPDATE operations SET status = 'in-progress' WHERE batch_id = ?`).run(
+      applyResult.batchId,
+    );
+
+    // Now reconcile — dest is present and matches post_hash → should mark completed
+    const reconcileResult = await reconcileOnStartup(db);
+
+    const reconciledOp = db
+      .prepare(`SELECT status FROM operations WHERE batch_id = ? AND kind = 'copy'`)
+      .get(applyResult.batchId) as { status: string };
+
+    expect(reconciledOp.status).toBe('completed');
+    expect(reconcileResult.fixed).toBeGreaterThanOrEqual(1);
   });
 });

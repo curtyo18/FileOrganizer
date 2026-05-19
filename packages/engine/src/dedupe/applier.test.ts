@@ -180,4 +180,45 @@ describe('applyDedupe', () => {
     expect(existsSync(join(driveRoot, 'a.jpg'))).toBe(true);
     expect(existsSync(join(driveRoot, 'b.jpg'))).toBe(true);
   });
+
+  it('records post_hash on the quarantine operation row', async () => {
+    const files = new FilesRepo(db);
+    const body = 'dedupe-post-hash-content';
+    const hash = sha(body);
+    for (const name of ['x.jpg', 'y.jpg']) {
+      const p = join(driveRoot, name);
+      writeFileSync(p, body);
+      files.upsertOne({
+        driveId,
+        path: p,
+        name,
+        extension: 'jpg',
+        sizeBytes: body.length,
+        category: 'image',
+        sha256: hash,
+        mtime: '2024-01-01T00:00:00.000Z',
+        ctime: '2024-01-01T00:00:00.000Z',
+        exifDate: null,
+        dateSource: 'mtime',
+        width: null,
+        height: null,
+        durationSeconds: null,
+        ntfsFileId: null,
+        state: 'indexed',
+        scanId: 's',
+      });
+    }
+    const plan = planDedupe(db, { minSizeBytes: 1 });
+    expect(plan.operations).toHaveLength(1);
+    const result = await applyDedupe({
+      db,
+      operations: plan.operations,
+      driveRoots: new Map([[driveId, driveRoot]]),
+    });
+    expect(result.completed).toBe(1);
+    const opRow = db
+      .prepare(`SELECT post_hash FROM operations WHERE batch_id = ? AND kind = 'quarantine'`)
+      .get(result.batchId) as { post_hash: string | null };
+    expect(opRow.post_hash).toBe(hash);
+  });
 });

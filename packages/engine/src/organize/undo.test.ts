@@ -252,6 +252,68 @@ describe('undoBatch', () => {
     ).rejects.toThrow(/nope/);
   });
 
+  it('refuses to undo a cross-drive move when the destination hash has drifted (post_hash mismatch)', async () => {
+    const sourceDriveId = seedDrive('SRC-T');
+    const destDriveId = seedDrive('DST-T');
+    seedScan(sourceDriveId);
+    const ruleId = seedRule();
+    const sourceRoot = resolve(dir, 'SRC-T');
+    const destRoot = resolve(dir, 'DST-T');
+    const sourcePath = resolve(sourceRoot, 'tamper.jpg');
+    const destPath = resolve(destRoot, 'Photos', 'tamper.jpg');
+    const fileId = seedFile(sourceDriveId, sourcePath, 'original-content');
+
+    const apply = await applyApprovedBatch({
+      db,
+      description: 'forward cross-drive',
+      operations: [
+        plannedOp(
+          fileId,
+          ruleId,
+          'cross-drive-move',
+          sourceDriveId,
+          sourcePath,
+          destDriveId,
+          destPath,
+        ),
+      ],
+      driveRoots: new Map([
+        [sourceDriveId, sourceRoot],
+        [destDriveId, destRoot],
+      ]),
+      chunkBytes: 64 * 1024,
+    });
+
+    expect(existsSync(destPath)).toBe(true);
+    expect(existsSync(sourcePath)).toBe(false);
+
+    // Verify post_hash was recorded on the completed op
+    const opRow = db
+      .prepare(
+        `SELECT post_hash FROM operations WHERE batch_id = ? AND kind = 'copy' ORDER BY id DESC LIMIT 1`,
+      )
+      .get(apply.batchId) as { post_hash: string | null };
+    expect(opRow.post_hash).toBe(sha('original-content'));
+
+    // Tamper with the destination to trigger mismatch
+    writeFileSync(destPath, 'tampered-content-different');
+
+    const undo = await undoBatch({
+      db,
+      batchId: apply.batchId,
+      driveRoots: new Map([
+        [sourceDriveId, sourceRoot],
+        [destDriveId, destRoot],
+      ]),
+    });
+
+    // The undo must be refused: skipped=1, reverted=0, errors contains the mismatch reason
+    expect(undo.reverted).toBe(0);
+    expect(undo.skipped).toBe(1);
+    expect(undo.errors).toHaveLength(1);
+    expect(undo.errors[0]!.reason).toMatch(/post_hash/);
+  });
+
   it('rolls back source restore when dest unlink fails on cross-drive undo', async () => {
     const sourceDriveId = seedDrive('SRC');
     const destDriveId = seedDrive('DST');

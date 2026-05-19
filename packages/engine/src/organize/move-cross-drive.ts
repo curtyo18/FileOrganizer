@@ -41,7 +41,7 @@ export async function moveCrossDrive(input: MoveCrossDriveInput): Promise<MoveOu
   const decision = await resolveCollision(input.destPath, row.sha256, input.chunkBytes);
 
   if (decision.kind === 'same-content') {
-    quarantineFile({
+    const qResult = quarantineFile({
       db: input.db,
       batchId: input.batchId,
       driveId: row.driveId,
@@ -54,7 +54,7 @@ export async function moveCrossDrive(input: MoveCrossDriveInput): Promise<MoveOu
     input.db
       .prepare(`UPDATE files SET state = 'quarantined' WHERE id = ?`)
       .run(input.fileId);
-    return { kind: 'completed-via-existing', finalDestPath: decision.path };
+    return { kind: 'completed-via-existing', finalDestPath: decision.path, postHash: row.sha256, quarantinePath: qResult.quarantinePath };
   }
 
   const finalDestPath = decision.path;
@@ -91,7 +91,7 @@ export async function moveCrossDrive(input: MoveCrossDriveInput): Promise<MoveOu
     );
   }
 
-  quarantineFile({
+  const qResult = quarantineFile({
     db: input.db,
     batchId: input.batchId,
     driveId: row.driveId,
@@ -104,5 +104,5 @@ export async function moveCrossDrive(input: MoveCrossDriveInput): Promise<MoveOu
   input.db
     .prepare(`UPDATE files SET path = ?, drive_id = ?, state = 'moved' WHERE id = ?`)
     .run(finalDestPath, input.destDriveId, input.fileId);
-  return { kind: 'moved', finalDestPath };
+  return { kind: 'moved', finalDestPath, postHash: liveHash, quarantinePath: qResult.quarantinePath };
 }

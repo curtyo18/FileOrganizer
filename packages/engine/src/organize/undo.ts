@@ -116,10 +116,15 @@ async function reverseSameDriveMove(
       | { sha256: string }
       | undefined
   )?.sha256;
-  if (!fileSha) throw new Error(`file ${op.fileId} not found`);
+  const verifyHash = op.postHash ?? fileSha;
+  if (!verifyHash) throw new Error(`file ${op.fileId} not found`);
   const live = await hashFile(op.destPath, { chunkBytes, sleepMs: 0 });
-  if (live !== fileSha) {
-    throw new Error(`hash drift at ${op.destPath}`);
+  if (live !== verifyHash) {
+    throw new Error(
+      op.postHash
+        ? `post_hash mismatch at ${op.destPath}`
+        : `hash drift at ${op.destPath}`,
+    );
   }
 
   if (fs.existsSync(op.sourcePath)) {
@@ -162,10 +167,15 @@ async function reverseCrossDriveMove(
       | { sha256: string }
       | undefined
   )?.sha256;
-  if (!fileSha) throw new Error(`file ${op.fileId} not found`);
+  const verifyHash = op.postHash ?? fileSha;
+  if (!verifyHash) throw new Error(`file ${op.fileId} not found`);
   const live = await hashFile(op.destPath, { chunkBytes, sleepMs: 0 });
-  if (live !== fileSha) {
-    throw new Error(`hash drift at ${op.destPath}`);
+  if (live !== verifyHash) {
+    throw new Error(
+      op.postHash
+        ? `post_hash mismatch at ${op.destPath}`
+        : `hash drift at ${op.destPath}`,
+    );
   }
 
   const sourceRoot = opts.driveRoots.get(op.sourceDriveId);

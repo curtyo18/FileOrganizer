@@ -81,6 +81,7 @@ export async function applyDedupe(input: ApplyDedupeInput): Promise<ApplyDedupeR
           .run(op.removeFileId);
         batches.updateOperationStatus(dbOp.id, 'completed', {
           quarantinePath: result.quarantinePath,
+          postHash: liveHash,
         });
         completed += 1;
         reclaimedBytes += fileRow.sizeBytes;

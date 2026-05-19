@@ -960,4 +960,66 @@ describe('applyApprovedBatch', () => {
       .get(result.batchId) as { status: string };
     expect(op.status).toBe('completed-via-existing');
   });
+
+  it('records post_hash on a same-drive move operation', async () => {
+    const driveId = seedDrive('V');
+    seedScan(driveId);
+    const ruleId = seedRule('always-review');
+    const root = resolve(dir, 'V');
+    const sourcePath = resolve(root, 'b.jpg');
+    const content = 'same-drive-content';
+    const fileId = seedFile(driveId, sourcePath, content);
+
+    const ops = [
+      plannedOp(fileId, ruleId, 'same-drive-move', driveId, sourcePath, driveId, resolve(root, 'Photos', 'b.jpg')),
+    ];
+
+    const result = await applyApprovedBatch({
+      db,
+      description: 'same-drive post_hash test',
+      operations: ops,
+      driveRoots: new Map([[driveId, root]]),
+      chunkBytes: 64 * 1024,
+    });
+
+    expect(result.completed).toBe(1);
+    const opRow = db
+      .prepare(`SELECT post_hash FROM operations WHERE batch_id = ?`)
+      .get(result.batchId) as { post_hash: string | null };
+    expect(opRow.post_hash).toBe(shaOf(content));
+  });
+
+  it('records post_hash on a cross-drive move operation', async () => {
+    const sourceDriveId = seedDrive('SRC');
+    const destDriveId = seedDrive('DST');
+    seedScan(sourceDriveId);
+    const ruleId = seedRule('cross-drive-review');
+    const sourceRoot = resolve(dir, 'SRC');
+    const destRoot = resolve(dir, 'DST');
+    const sourcePath = resolve(sourceRoot, 'c.jpg');
+    const destPath = resolve(destRoot, 'Photos', 'c.jpg');
+    const content = 'cross-drive-content';
+    const fileId = seedFile(sourceDriveId, sourcePath, content);
+
+    const ops = [
+      plannedOp(fileId, ruleId, 'cross-drive-move', sourceDriveId, sourcePath, destDriveId, destPath),
+    ];
+
+    const result = await applyApprovedBatch({
+      db,
+      description: 'cross-drive post_hash test',
+      operations: ops,
+      driveRoots: new Map([
+        [sourceDriveId, sourceRoot],
+        [destDriveId, destRoot],
+      ]),
+      chunkBytes: 64 * 1024,
+    });
+
+    expect(result.completed).toBe(1);
+    const opRow = db
+      .prepare(`SELECT post_hash FROM operations WHERE batch_id = ?`)
+      .get(result.batchId) as { post_hash: string | null };
+    expect(opRow.post_hash).toBe(shaOf(content));
+  });
 });
