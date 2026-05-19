@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -39,6 +39,10 @@ interface OpInsert {
   status: string;
 }
 
+interface OpInsertFull extends OpInsert {
+  quarantine_path?: string | null;
+}
+
 function insertOp(values: OpInsert): number {
   const result = db
     .prepare(
@@ -53,6 +57,25 @@ function insertOp(values: OpInsert): number {
       values.pre_hash,
       values.post_hash,
       values.status,
+    );
+  return Number(result.lastInsertRowid);
+}
+
+function insertOpFull(values: OpInsertFull): number {
+  const result = db
+    .prepare(
+      `INSERT INTO operations (batch_id, kind, source_path, dest_path, pre_hash, post_hash, status, quarantine_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      values.batch_id,
+      values.kind,
+      values.source_path,
+      values.dest_path,
+      values.pre_hash,
+      values.post_hash,
+      values.status,
+      values.quarantine_path ?? null,
     );
   return Number(result.lastInsertRowid);
 }
@@ -376,5 +399,150 @@ describe('reconcileOnStartup – post_hash written by production applier', () =>
 
     expect(reconciledOp.status).toBe('completed');
     expect(reconcileResult.fixed).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('reconcileOnStartup – per-kind post-conditions', () => {
+  beforeEach(() => {
+    db.prepare(
+      `INSERT INTO batches (id, kind, started_at, status, description, summary) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run('bk1', 'move', '2024-01-01T00:00:00Z', 'in-progress', 't', '{}');
+  });
+
+  it('move op: dest matches post_hash AND source still present → failed with anomaly message', async () => {
+    const src = join(dir, 'src-move.jpg');
+    const dest = join(dir, 'dest-move.jpg');
+    const content = 'move-content';
+    writeFileSync(src, content);
+    writeFileSync(dest, content);
+    const hash = createHash('sha256').update(content).digest('hex');
+
+    const opId = insertOp({
+      batch_id: 'bk1',
+      kind: 'move',
+      source_path: src,
+      dest_path: dest,
+      pre_hash: hash,
+      post_hash: hash,
+      status: 'in-progress',
+    });
+
+    const result = await reconcileOnStartup(db);
+    const op = db.prepare(`SELECT status, error_message FROM operations WHERE id = ?`).get(opId) as {
+      status: string;
+      error_message: string;
+    };
+    expect(op.status).toBe('failed');
+    expect(op.error_message).toMatch(/source still present/);
+    // A definite (non-ambiguous) failed verdict counts as fixed, not ambiguous
+    expect(result.ambiguous).toBe(0);
+    expect(result.fixed).toBeGreaterThanOrEqual(1);
+  });
+
+  it('hashFile throws → warn-logged with op id; classification uses distinct message', async () => {
+    const hasherModule = await import('../scan/hasher.js');
+    const spy = vi.spyOn(hasherModule, 'hashFile').mockRejectedValueOnce(new Error('EACCES: permission denied'));
+
+    // Capture log output via process.stderr — the module-level logger writes there via defaultWriter.
+    const captured: string[] = [];
+    const stderrAny = process.stderr as unknown as { write: (chunk: string) => boolean };
+    const originalWrite = stderrAny.write.bind(process.stderr);
+    stderrAny.write = (chunk: string) => {
+      captured.push(chunk);
+      return originalWrite(chunk);
+    };
+
+    const content = 'hash-error-content';
+    const dest = join(dir, 'dest-hash-error.jpg');
+    writeFileSync(dest, content);
+    const hash = createHash('sha256').update(content).digest('hex');
+
+    const opId = insertOp({
+      batch_id: 'bk1',
+      kind: 'move',
+      source_path: join(dir, 'gone-src'),
+      dest_path: dest,
+      pre_hash: hash,
+      post_hash: hash,
+      status: 'in-progress',
+    });
+
+    await reconcileOnStartup(db);
+
+    // Restore
+    stderrAny.write = originalWrite;
+    spy.mockRestore();
+
+    const warnLines = captured.filter((l) => l.includes('reconcile-hash-error'));
+    expect(warnLines.length).toBeGreaterThanOrEqual(1);
+    const parsed = JSON.parse(warnLines[0]!.trim()) as { op_id?: number; level?: string };
+    expect(parsed.op_id).toBe(opId);
+    expect(parsed.level).toBe('warn');
+  });
+
+  it('quarantine op: quarantine_path file exists on disk → completed', async () => {
+    const qPath = join(dir, 'q-batch', 'file.jpg');
+    mkdirSync(join(dir, 'q-batch'), { recursive: true });
+    writeFileSync(qPath, 'quarantine-content');
+
+    const opId = insertOpFull({
+      batch_id: 'bk1',
+      kind: 'quarantine',
+      source_path: join(dir, 'original.jpg'),
+      dest_path: null,
+      pre_hash: null,
+      post_hash: null,
+      status: 'in-progress',
+      quarantine_path: qPath,
+    });
+
+    const result = await reconcileOnStartup(db);
+    const op = db.prepare(`SELECT status FROM operations WHERE id = ?`).get(opId) as {
+      status: string;
+    };
+    expect(op.status).toBe('completed');
+    expect(result.fixed).toBeGreaterThanOrEqual(1);
+  });
+
+  it('restore op: original (op.dest_path) present and op.quarantine_path absent → completed', async () => {
+    const restoreDest = join(dir, 'restored.jpg');
+    writeFileSync(restoreDest, 'restored-content');
+    const missingQPath = join(dir, 'q-batch-gone', 'file.jpg');
+
+    const opId = insertOpFull({
+      batch_id: 'bk1',
+      kind: 'restore',
+      source_path: null,
+      dest_path: restoreDest,
+      pre_hash: null,
+      post_hash: null,
+      status: 'in-progress',
+      quarantine_path: missingQPath,
+    });
+
+    const result = await reconcileOnStartup(db);
+    const op = db.prepare(`SELECT status FROM operations WHERE id = ?`).get(opId) as {
+      status: string;
+    };
+    expect(op.status).toBe('completed');
+    expect(result.fixed).toBeGreaterThanOrEqual(1);
+  });
+
+  it('counter uses ambiguous field — both source and dest missing yields ambiguous: true and increments count', async () => {
+    insertOp({
+      batch_id: 'bk1',
+      kind: 'move',
+      source_path: join(dir, 'gone-src-amb'),
+      dest_path: join(dir, 'gone-dest-amb'),
+      pre_hash: 'x',
+      post_hash: 'y',
+      status: 'in-progress',
+    });
+
+    const result = await reconcileOnStartup(db);
+    // Both missing → ambiguous
+    expect(result.ambiguous).toBeGreaterThanOrEqual(1);
+    // fixed should NOT include this op
+    expect(result.fixed).toBe(0);
   });
 });

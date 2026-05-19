@@ -5,6 +5,7 @@ import type { Catalog } from './connection.js';
 import { hashFile } from '../scan/hasher.js';
 import { createLogger, defaultWriter } from '../log.js';
 import { QUARANTINE_DIR_NAME } from '../quarantine/quarantine.js';
+import type { OperationKind } from '@fileorganizer/shared';
 
 const log = createLogger({ level: 'info', write: defaultWriter, context: { module: 'reconcile' } });
 
@@ -18,7 +19,7 @@ export interface ReconcileResult {
 interface OpRow {
   id: number;
   batch_id: string;
-  kind: string;
+  kind: OperationKind;
   source_path: string | null;
   dest_path: string | null;
   pre_hash: string | null;
@@ -30,6 +31,7 @@ interface OpRow {
 interface Decision {
   status: 'completed' | 'failed';
   message: string;
+  ambiguous: boolean;
 }
 
 export async function reconcileOnStartup(db: Catalog): Promise<ReconcileResult> {
@@ -51,7 +53,7 @@ export async function reconcileOnStartup(db: Catalog): Promise<ReconcileResult> 
   for (const op of ops) {
     const decision = await decide(op);
     decisions.push({ op, decision });
-    if (decision.message.includes('ambiguous')) ambiguous += 1;
+    if (decision.ambiguous) ambiguous += 1;
     else fixed += 1;
   }
 
@@ -170,31 +172,100 @@ async function detectQuarantineOrphans(db: Catalog): Promise<string[]> {
   return orphans;
 }
 
-async function decide(op: OpRow): Promise<Decision> {
+interface FsState {
+  destPresent: boolean;
+  sourcePresent: boolean;
+  destHashMatches: true | false | 'hash-error';
+}
+
+async function computeFsState(op: OpRow): Promise<FsState> {
   const destPresent = op.dest_path != null && existsSync(op.dest_path);
   const sourcePresent = op.source_path != null && existsSync(op.source_path);
 
+  let destHashMatches: true | false | 'hash-error' = false;
   if (destPresent && op.post_hash) {
     try {
       const live = await hashFile(op.dest_path!, { chunkBytes: 1024 * 1024, sleepMs: 0 });
-      if (live === op.post_hash) {
-        return { status: 'completed', message: 'reconciled: destination matches post_hash' };
-      }
-    } catch {
-      // fall through
+      destHashMatches = live === op.post_hash;
+    } catch (err) {
+      log.warn('reconcile-hash-error', { op_id: op.id, dest: op.dest_path, err });
+      destHashMatches = 'hash-error';
     }
   }
 
-  if (!destPresent && sourcePresent) {
+  return { destPresent, sourcePresent, destHashMatches };
+}
+
+function defaultDecide(fs: FsState): Decision {
+  if (!fs.destPresent && fs.sourcePresent) {
     return {
       status: 'failed',
       message: 'reconciled: never finished; source intact, dest missing',
+      ambiguous: false,
     };
   }
-
-  if (!destPresent && !sourcePresent) {
-    return { status: 'failed', message: 'reconciled: ambiguous (both source and dest missing)' };
+  if (!fs.destPresent && !fs.sourcePresent) {
+    return {
+      status: 'failed',
+      message: 'reconciled: ambiguous (both source and dest missing)',
+      ambiguous: true,
+    };
   }
+  return { status: 'failed', message: 'reconciled: ambiguous outcome', ambiguous: true };
+}
 
-  return { status: 'failed', message: 'reconciled: ambiguous outcome' };
+const POST_CONDITIONS: Record<OperationKind, (op: OpRow, fs: FsState) => Decision> = {
+  move(op, fs) {
+    if (fs.destHashMatches === true) {
+      if (fs.sourcePresent) {
+        return {
+          status: 'failed',
+          message: 'reconciled: move completed but source still present',
+          ambiguous: false,
+        };
+      }
+      return { status: 'completed', message: 'reconciled: destination matches post_hash', ambiguous: false };
+    }
+    if (fs.destHashMatches === 'hash-error') {
+      return { status: 'failed', message: 'reconciled: hash-read error on destination', ambiguous: false };
+    }
+    return defaultDecide(fs);
+  },
+
+  copy(_op, fs) {
+    if (fs.destHashMatches === true) {
+      return { status: 'completed', message: 'reconciled: destination matches post_hash', ambiguous: false };
+    }
+    if (fs.destHashMatches === 'hash-error') {
+      return { status: 'failed', message: 'reconciled: hash-read error on destination', ambiguous: false };
+    }
+    return defaultDecide(fs);
+  },
+
+  quarantine(op, _fs) {
+    if (op.quarantine_path != null && existsSync(op.quarantine_path)) {
+      return { status: 'completed', message: 'reconciled: quarantine_path present on disk', ambiguous: false };
+    }
+    return { status: 'failed', message: 'reconciled: quarantine_path missing from disk', ambiguous: false };
+  },
+
+  restore(op, _fs) {
+    const destPresent = op.dest_path != null && existsSync(op.dest_path);
+    const quarantineAbsent = op.quarantine_path == null || !existsSync(op.quarantine_path);
+    if (destPresent && quarantineAbsent) {
+      return { status: 'completed', message: 'reconciled: restore target present and quarantine_path absent', ambiguous: false };
+    }
+    return { status: 'failed', message: 'reconciled: restore could not be confirmed', ambiguous: false };
+  },
+
+  delete(_op, fs) {
+    // Forward-compatibility stub — use the default destination-based logic.
+    return defaultDecide(fs);
+  },
+};
+
+async function decide(op: OpRow): Promise<Decision> {
+  const fs = await computeFsState(op);
+  const fn = POST_CONDITIONS[op.kind] ?? ((_o: OpRow, f: FsState) => defaultDecide(f));
+  return fn(op, fs);
 }
