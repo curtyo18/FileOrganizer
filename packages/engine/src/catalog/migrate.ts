@@ -20,16 +20,16 @@ export function currentSchemaVersion(db: Catalog): number {
   return row.v ?? 0;
 }
 
-export function migrate(db: Catalog): void {
+export function migrate(db: Catalog, migrationsDir: string = MIGRATIONS_DIR): void {
   const current = currentSchemaVersion(db);
-  const files = readdirSync(MIGRATIONS_DIR)
+  const files = readdirSync(migrationsDir)
     .filter((f) => /^\d{4}_.+\.sql$/.test(f))
     .sort();
 
   for (const file of files) {
     const version = parseInt(file.slice(0, 4), 10);
     if (version <= current) continue;
-    const sql = readFileSync(join(MIGRATIONS_DIR, file), 'utf-8');
+    const sql = readFileSync(join(migrationsDir, file), 'utf-8');
 
     // Schema-rebuild migrations (e.g. CHECK constraint widening via the
     // CREATE/INSERT/DROP/RENAME dance) hit "FOREIGN KEY constraint failed"
@@ -42,6 +42,15 @@ export function migrate(db: Catalog): void {
     try {
       const tx = db.transaction(() => {
         db.exec(sql);
+        // FK check INSIDE the transaction so a violation rolls back the
+        // schema_version insert along with the migration itself.
+        const violations = db.pragma('foreign_key_check') as unknown[];
+        if (violations.length > 0) {
+          throw new CatalogError(
+            'MIGRATION_FK_VIOLATIONS',
+            `migration ${file} left ${violations.length} foreign-key violations`,
+          );
+        }
         db.prepare(`INSERT INTO schema_version (version, applied_at) VALUES (?, ?)`).run(
           version,
           new Date().toISOString(),
@@ -50,17 +59,11 @@ export function migrate(db: Catalog): void {
       try {
         tx();
       } catch (err) {
+        if (err instanceof CatalogError) throw err;
         throw new CatalogError(
           'MIGRATION_FAILED',
           `migration ${file} failed: ${(err as Error).message}`,
           err,
-        );
-      }
-      const violations = db.pragma('foreign_key_check') as unknown[];
-      if (violations.length > 0) {
-        throw new CatalogError(
-          'MIGRATION_FK_VIOLATIONS',
-          `migration ${file} left ${violations.length} foreign-key violations`,
         );
       }
     } finally {
