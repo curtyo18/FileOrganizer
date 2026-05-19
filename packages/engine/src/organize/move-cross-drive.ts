@@ -1,5 +1,5 @@
-import { createReadStream, createWriteStream, mkdirSync } from 'node:fs';
-import { unlink } from 'node:fs/promises';
+import { createReadStream, mkdirSync } from 'node:fs';
+import { open, unlink, type FileHandle } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import { dirname } from 'node:path';
 import { DriveError, IntegrityError } from '@fileorganizer/shared';
@@ -59,9 +59,22 @@ export async function moveCrossDrive(input: MoveCrossDriveInput): Promise<MoveOu
 
   const finalDestPath = decision.path;
   mkdirSync(dirname(finalDestPath), { recursive: true });
+  const handle = await open(finalDestPath, 'w');
   try {
-    await pipeline(createReadStream(row.path), createWriteStream(finalDestPath));
+    const destStream = handle.createWriteStream({ autoClose: false });
+    await pipeline(
+      createReadStream(row.path),
+      destStream,
+    );
+    await handle.sync();
+    // pipeline() does not synchronously destroy the write-stream on success
+    // when autoClose: false; without this destroy, handle.close() blocks
+    // waiting for the stream's internal kRefs to reach zero.
+    destStream.destroy();
+    await handle.close();
   } catch (err) {
+    try { await handle.close(); } catch { /* swallow */ }
+    try { await unlink(finalDestPath); } catch { /* swallow — DRIVE_DISCONNECTED unlinks fail; OK */ }
     const code = (err as NodeJS.ErrnoException).code;
     if (code && DISCONNECT_CODES.has(code)) {
       throw new DriveError(
@@ -71,6 +84,30 @@ export async function moveCrossDrive(input: MoveCrossDriveInput): Promise<MoveOu
       );
     }
     throw err;
+  }
+
+  // Parent-dir fsync (POSIX only; Windows fsync of a directory returns EISDIR / EBADF).
+  if (process.platform !== 'win32') {
+    let dirHandle: FileHandle | undefined;
+    try {
+      dirHandle = await open(dirname(finalDestPath), 'r');
+      await dirHandle.sync();
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'EISDIR' && code !== 'EBADF') {
+        process.stderr.write(JSON.stringify({
+          ts: new Date().toISOString(),
+          level: 'warn',
+          msg: 'parent-dir-fsync-failed',
+          path: dirname(finalDestPath),
+          code,
+        }) + '\n');
+      }
+    } finally {
+      if (dirHandle) {
+        try { await dirHandle.close(); } catch { /* swallow */ }
+      }
+    }
   }
 
   const liveHash = await hashFile(finalDestPath, {
