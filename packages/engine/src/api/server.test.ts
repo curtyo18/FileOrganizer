@@ -2266,3 +2266,119 @@ describe('POST /api/scans — volume serial mismatch', () => {
     expect(body.code).toBe('VOLUME_SERIAL_MISMATCH');
   });
 });
+
+// ---------------------------------------------------------------------------
+// T11: /api/duplicates/apply threads throttle profile into hashFile
+// ---------------------------------------------------------------------------
+
+describe('dedup-apply: hashFile receives throttle profile chunk size', () => {
+  it('with profile=idle, hashFile is called with idle readChunkBytes (256 KB)', async () => {
+    const { vi } = await import('vitest');
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    const { createHash } = await import('node:crypto');
+    const { ThrottleManager, ThrottleManagerRef } = await import('../throttle/manager.js');
+    const { defaultThrottleProfiles } = await import('@fileorganizer/shared');
+    const { DriveRepo } = await import('../drives/repo.js');
+    const { FilesRepo } = await import('../catalog/files-repo.js');
+    const hasherModule = await import('../scan/hasher.js');
+
+    const localDir = mkdtempSync(join(tmpdir(), 'fileorg-dedup-throttle-'));
+    const localDb = openCatalog(join(localDir, 'cat.db'));
+    migrate(localDb);
+
+    const profiles = defaultThrottleProfiles(2);
+    const idleChunkBytes = profiles.idle.readChunkBytes; // 256 * 1024
+
+    const throttleRef = new ThrottleManagerRef(new ThrottleManager(profiles, 'idle', []));
+    const serverHandle = await createServer({
+      db: localDb,
+      port: 0,
+      hostname: '127.0.0.1',
+      throttle: throttleRef,
+    });
+
+    try {
+      const driveRoot = join(localDir, 'drive');
+      mkdirSync(driveRoot, { recursive: true });
+      const driveRepo = new DriveRepo(localDb);
+      const drive = driveRepo.upsert({
+        volumeSerial: 'THROT',
+        label: 'THROT',
+        currentLetter: null,
+        kind: 'local',
+        roles: [],
+        totalBytes: 1,
+        freeBytes: 1,
+      });
+      localDb.prepare(
+        `INSERT INTO scans (id, drive_id, started_at, status, throttle_profile)
+         VALUES (?, ?, ?, ?, ?)`,
+      ).run('s-throt', drive.id, '2024-01-01T00:00:00.000Z', 'completed', 'idle');
+
+      const body = 'throttle-routing-content';
+      const hash = createHash('sha256').update(body).digest('hex');
+      const files = new FilesRepo(localDb);
+      for (const name of ['dup1.jpg', 'dup2.jpg']) {
+        const p = join(driveRoot, name);
+        writeFileSync(p, body);
+        files.upsertOne({
+          driveId: drive.id,
+          path: p,
+          name,
+          extension: 'jpg',
+          sizeBytes: body.length,
+          category: 'image',
+          sha256: hash,
+          mtime: '2024-01-01T00:00:00.000Z',
+          ctime: '2024-01-01T00:00:00.000Z',
+          exifDate: null,
+          dateSource: 'mtime',
+          width: null,
+          height: null,
+          durationSeconds: null,
+          ntfsFileId: null,
+          state: 'indexed',
+          scanId: 's-throt',
+        });
+      }
+
+      const { planDedupe } = await import('../dedupe/planner.js');
+      const plan = planDedupe(localDb, { minSizeBytes: 1 });
+      expect(plan.operations).toHaveLength(1);
+
+      // Capture opts via mockImplementation — vi.spyOn call-tracking has a
+      // known quirk with ESM live-binding proxies in Vitest 2 (mock intercepts
+      // correctly but spy.mock.calls count doesn't increment). Use captured
+      // args via closure instead.
+      let capturedChunkBytes: number | undefined;
+      const spy = vi.spyOn(hasherModule, 'hashFile').mockImplementation(
+        async (_path: string, opts: { chunkBytes: number; sleepMs: number }) => {
+          capturedChunkBytes = opts.chunkBytes;
+          return hash;
+        },
+      );
+      try {
+        const res = await fetch(
+          `http://127.0.0.1:${serverHandle.port}/api/duplicates/apply`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              operations: plan.operations,
+              driveRoots: { [drive.id]: driveRoot },
+            }),
+          },
+        );
+        expect(res.status).toBe(200);
+      } finally {
+        spy.mockRestore();
+      }
+
+      expect(capturedChunkBytes).toBe(idleChunkBytes);
+    } finally {
+      await serverHandle.close();
+      closeCatalog(localDb);
+      rmSync(localDir, { recursive: true, force: true });
+    }
+  });
+});

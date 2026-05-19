@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -76,6 +76,8 @@ describe('applyDedupe', () => {
       db,
       operations: plan.operations,
       driveRoots: new Map([[driveId, driveRoot]]),
+      chunkBytes: 1024 * 1024,
+      sleepMs: 0,
     });
     expect(result.completed).toBe(2);
     expect(result.failed).toBe(0);
@@ -126,6 +128,8 @@ describe('applyDedupe', () => {
       db,
       operations: plan.operations,
       driveRoots: new Map([[driveId, driveRoot]]),
+      chunkBytes: 1024 * 1024,
+      sleepMs: 0,
     });
 
     // The op must fail (not panic with raw ENOENT).
@@ -175,6 +179,8 @@ describe('applyDedupe', () => {
       db,
       operations: plan.operations,
       driveRoots: new Map([[driveId, driveRoot]]),
+      chunkBytes: 1024 * 1024,
+      sleepMs: 0,
     });
     expect(result.failed).toBeGreaterThan(0);
     expect(existsSync(join(driveRoot, 'a.jpg'))).toBe(true);
@@ -214,11 +220,74 @@ describe('applyDedupe', () => {
       db,
       operations: plan.operations,
       driveRoots: new Map([[driveId, driveRoot]]),
+      chunkBytes: 1024 * 1024,
+      sleepMs: 0,
     });
     expect(result.completed).toBe(1);
     const opRow = db
       .prepare(`SELECT post_hash FROM operations WHERE batch_id = ? AND kind = 'quarantine'`)
       .get(result.batchId) as { post_hash: string | null };
     expect(opRow.post_hash).toBe(hash);
+  });
+
+  it('passes input.chunkBytes to hashFile, not the hardcoded 1 MB literal', async () => {
+    const hasherModule = await import('../scan/hasher.js');
+    const files = new FilesRepo(db);
+    const body = 'chunk-bytes-routing-content';
+    const hash = sha(body);
+    for (const name of ['p.jpg', 'q.jpg']) {
+      const p = join(driveRoot, name);
+      writeFileSync(p, body);
+      files.upsertOne({
+        driveId,
+        path: p,
+        name,
+        extension: 'jpg',
+        sizeBytes: body.length,
+        category: 'image',
+        sha256: hash,
+        mtime: '2024-01-01T00:00:00.000Z',
+        ctime: '2024-01-01T00:00:00.000Z',
+        exifDate: null,
+        dateSource: 'mtime',
+        width: null,
+        height: null,
+        durationSeconds: null,
+        ntfsFileId: null,
+        state: 'indexed',
+        scanId: 's',
+      });
+    }
+    const plan = planDedupe(db, { minSizeBytes: 1 });
+    expect(plan.operations).toHaveLength(1);
+
+    // Capture the opts passed to hashFile via mockImplementation, since
+    // vi.spyOn call-tracking has a known quirk with ESM live-binding proxies
+    // in Vitest 2 — the mock intercepts correctly (tested above) but
+    // spy.mock.calls doesn't increment. Use captured args instead.
+    let capturedOpts: { chunkBytes: number; sleepMs: number } | undefined;
+    const spy = vi.spyOn(hasherModule, 'hashFile').mockImplementation(
+      async (_path: string, opts: { chunkBytes: number; sleepMs: number }) => {
+        capturedOpts = opts;
+        return hash; // return the correct hash so the op completes
+      },
+    );
+    let result: Awaited<ReturnType<typeof applyDedupe>> | undefined;
+    try {
+      result = await applyDedupe({
+        db,
+        operations: plan.operations,
+        driveRoots: new Map([[driveId, driveRoot]]),
+        chunkBytes: 256 * 1024,
+        sleepMs: 3,
+      });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(result?.completed).toBe(1);
+    expect(capturedOpts).toBeDefined();
+    expect(capturedOpts?.chunkBytes).toBe(256 * 1024);
+    expect(capturedOpts?.sleepMs).toBe(3);
   });
 });

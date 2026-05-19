@@ -26,7 +26,7 @@ import { planOrganize, type PlannedOperation } from '../organize/planner.js';
 import { applyApprovedBatch, autoApply } from '../organize/applier.js';
 import { undoBatch } from '../organize/undo.js';
 import { findEmptyDirs, removeEmptyDirs } from '../cleanup/empty-dirs.js';
-import { DriveError, RuleError, ScanError, type Settings } from '@fileorganizer/shared';
+import { defaultThrottleProfiles, DriveError, RuleError, ScanError, type Settings } from '@fileorganizer/shared';
 import { EventBus } from './events.js';
 
 export interface CreateServerOptions {
@@ -358,10 +358,15 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       return c.json({ error: 'operations must be an array' }, 400);
     }
     const merged = mergeDriveRoots(drives, body.driveRoots ?? {});
+    const dedupeProfile = opts.throttle
+      ? opts.throttle.current()
+      : defaultThrottleProfiles(1).balanced;
     const result = await applyDedupe({
       db: opts.db,
       operations: body.operations,
       driveRoots: merged,
+      chunkBytes: dedupeProfile.readChunkBytes,
+      sleepMs: dedupeProfile.interChunkSleepMs,
     });
     events.publish({ type: 'batch-status', batchId: result.batchId, status: 'completed' });
     return c.json(result);
