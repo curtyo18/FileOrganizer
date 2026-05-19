@@ -192,10 +192,19 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     try {
       await Promise.race([onStartFired, promise]);
     } catch (err) {
-      if (err instanceof ScanError && err.code === 'VOLUME_SERIAL_MISMATCH') {
-        return c.json({ error: err.message, code: err.code }, 409);
+      if (err instanceof ScanError) {
+        const code = err.code;
+        const status =
+          code === 'VOLUME_SERIAL_MISMATCH' ? 409 :
+          code === 'DRIVE_NOT_FOUND' ? 404 :
+          code === 'DRIVE_DISCONNECTED' ? 503 :
+          500;
+        return c.json({ error: err.message, code }, status);
       }
-      throw err;
+      if (err instanceof DriveError && err.code === 'DRIVE_DISCONNECTED') {
+        return c.json({ error: err.message, code: err.code }, 503);
+      }
+      return c.json({ error: (err as Error).message ?? 'scan failed' }, 500);
     }
     const scan = scans.findById(registeredId!);
     return c.json({ scan }, 201);

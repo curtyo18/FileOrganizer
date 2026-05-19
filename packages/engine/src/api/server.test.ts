@@ -2268,6 +2268,170 @@ describe('POST /api/scans — volume serial mismatch', () => {
 });
 
 // ---------------------------------------------------------------------------
+// T15: POST /api/scans fails fast on pre-onStart runScan rejection
+// ---------------------------------------------------------------------------
+
+describe('POST /api/scans — pre-onStart rejection mapping', () => {
+  async function makeServerWithRunScanMock(
+    localDb: Catalog,
+    mockFn: (opts: unknown) => Promise<never>,
+  ): Promise<{ serverHandle: ServerHandle; spy: import('vitest').MockInstance }> {
+    const { vi } = await import('vitest');
+    const orchestratorModule = await import('../scan/orchestrator.js');
+    const spy = vi.spyOn(orchestratorModule, 'runScan').mockImplementation(mockFn as never);
+    const serverHandle = await createServer({ db: localDb, port: 0, hostname: '127.0.0.1' });
+    return { serverHandle, spy };
+  }
+
+  it('returns 500 within 100 ms when runScan rejects with a generic Error pre-onStart', async () => {
+    const localDir = mkdtempSync(join(tmpdir(), 'fileorg-t15-generic-'));
+    const localDb = openCatalog(join(localDir, 'cat.db'));
+    migrate(localDb);
+    const { DriveRepo } = await import('../drives/repo.js');
+    const drive = new DriveRepo(localDb).upsert({
+      volumeSerial: 'T15G',
+      label: 'T15G',
+      currentLetter: null,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1,
+      freeBytes: 1,
+    });
+    const { serverHandle, spy } = await makeServerWithRunScanMock(localDb, async () => {
+      throw new Error('boom');
+    });
+    try {
+      const t0 = Date.now();
+      const res = await fetch(`http://127.0.0.1:${serverHandle.port}/api/scans`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ driveId: drive.id, rootPaths: [localDir] }),
+      });
+      const elapsed = Date.now() - t0;
+      expect(res.status).toBe(500);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toContain('boom');
+      expect(elapsed).toBeLessThan(100);
+    } finally {
+      spy.mockRestore();
+      await serverHandle.close();
+      closeCatalog(localDb);
+      rmSync(localDir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns 503 when runScan rejects with ScanError DRIVE_DISCONNECTED pre-onStart', async () => {
+    const { ScanError } = await import('@fileorganizer/shared');
+    const localDir = mkdtempSync(join(tmpdir(), 'fileorg-t15-disconn-'));
+    const localDb = openCatalog(join(localDir, 'cat.db'));
+    migrate(localDb);
+    const { DriveRepo } = await import('../drives/repo.js');
+    const drive = new DriveRepo(localDb).upsert({
+      volumeSerial: 'T15D',
+      label: 'T15D',
+      currentLetter: null,
+      kind: 'network',
+      roles: [],
+      totalBytes: 1,
+      freeBytes: 1,
+    });
+    const { serverHandle, spy } = await makeServerWithRunScanMock(localDb, async () => {
+      throw new ScanError('DRIVE_DISCONNECTED', 'nas gone');
+    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${serverHandle.port}/api/scans`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ driveId: drive.id, rootPaths: [localDir] }),
+      });
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as { error: string; code: string };
+      expect(body.code).toBe('DRIVE_DISCONNECTED');
+      expect(body.error).toContain('nas gone');
+    } finally {
+      spy.mockRestore();
+      await serverHandle.close();
+      closeCatalog(localDb);
+      rmSync(localDir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns 404 when runScan rejects with ScanError DRIVE_NOT_FOUND pre-onStart', async () => {
+    const { ScanError } = await import('@fileorganizer/shared');
+    const localDir = mkdtempSync(join(tmpdir(), 'fileorg-t15-notfound-'));
+    const localDb = openCatalog(join(localDir, 'cat.db'));
+    migrate(localDb);
+    const { DriveRepo } = await import('../drives/repo.js');
+    const drive = new DriveRepo(localDb).upsert({
+      volumeSerial: 'T15N',
+      label: 'T15N',
+      currentLetter: null,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1,
+      freeBytes: 1,
+    });
+    const { serverHandle, spy } = await makeServerWithRunScanMock(localDb, async () => {
+      throw new ScanError('DRIVE_NOT_FOUND', 'drive vanished');
+    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${serverHandle.port}/api/scans`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ driveId: drive.id, rootPaths: [localDir] }),
+      });
+      expect(res.status).toBe(404);
+      const body = (await res.json()) as { error: string; code: string };
+      expect(body.code).toBe('DRIVE_NOT_FOUND');
+      expect(body.error).toContain('drive vanished');
+    } finally {
+      spy.mockRestore();
+      await serverHandle.close();
+      closeCatalog(localDb);
+      rmSync(localDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not hang waiting for onStart when runScan rejects synchronously', async () => {
+    const localDir = mkdtempSync(join(tmpdir(), 'fileorg-t15-hang-'));
+    const localDb = openCatalog(join(localDir, 'cat.db'));
+    migrate(localDb);
+    const { DriveRepo } = await import('../drives/repo.js');
+    const drive = new DriveRepo(localDb).upsert({
+      volumeSerial: 'T15H',
+      label: 'T15H',
+      currentLetter: null,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1,
+      freeBytes: 1,
+    });
+    const { serverHandle, spy } = await makeServerWithRunScanMock(localDb, async () => {
+      throw new Error('immediate failure');
+    });
+    try {
+      // If the handler hangs, the response promise never resolves and we'd time
+      // out. Use a race with a 5 s sentinel to surface that as a test failure.
+      const responsePromise = fetch(`http://127.0.0.1:${serverHandle.port}/api/scans`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ driveId: drive.id, rootPaths: [localDir] }),
+      });
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('handler hung — response not received within 5 s')), 5000),
+      );
+      const res = await Promise.race([responsePromise, timeoutPromise]);
+      expect(res.status).toBe(500);
+    } finally {
+      spy.mockRestore();
+      await serverHandle.close();
+      closeCatalog(localDb);
+      rmSync(localDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // T11: /api/duplicates/apply threads throttle profile into hashFile
 // ---------------------------------------------------------------------------
 
