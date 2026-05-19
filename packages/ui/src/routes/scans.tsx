@@ -54,7 +54,7 @@ export function Scans(_props: RoutableProps) {
       await api.startScan({ rootPath: target, profile });
       setInfo(`Scan started for ${target}`);
       setPathInput('');
-      setTimeout(reload, 200);
+      setTimeout(() => { void reload(); }, 200);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -70,7 +70,7 @@ export function Scans(_props: RoutableProps) {
     if (!window.confirm('Cancel scan?')) return;
     try {
       await api.cancelScan(scanId);
-      reload();
+      void reload();
     } catch (e) {
       setError((e as Error).message);
     }

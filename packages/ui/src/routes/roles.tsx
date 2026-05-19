@@ -182,7 +182,7 @@ function RoleCard({
   const commitThreshold = () => {
     const n = Number.parseInt(thresholdInput, 10);
     if (Number.isFinite(n) && n !== role.fillThresholdPercent) {
-      onSetThreshold(n);
+      void onSetThreshold(n);
     } else {
       setThresholdInput(String(role.fillThresholdPercent));
     }
@@ -304,7 +304,7 @@ function RoleCard({
             disabled={busy || !pendingDrive}
             onClick={() => {
               if (pendingDrive) {
-                onAddDrive(pendingDrive);
+                void onAddDrive(pendingDrive);
                 setPendingDrive('');
               }
             }}

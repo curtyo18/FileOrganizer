@@ -5,7 +5,7 @@ import { defaultApiClient } from '../api/client.js';
 import { Icon } from '../components/icon.js';
 import { driveColor, driveLetter } from '../lib/format.js';
 
-interface CleanupProps extends RoutableProps {}
+type CleanupProps = RoutableProps;
 
 interface DriveScanState {
   loading: boolean;

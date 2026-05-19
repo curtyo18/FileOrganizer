@@ -105,7 +105,7 @@ export function History(_props: RoutableProps) {
     ];
     const missing = driveIds.filter((id) => !driveById.get(id)?.mountPath);
     if (missing.length === 0) {
-      runUndo(b.id, {});
+      void runUndo(b.id, {});
     } else {
       setUndoFor({ batchId: b.id, driveIds: missing });
     }
@@ -234,7 +234,7 @@ export function History(_props: RoutableProps) {
           onResolve={(roots) => {
             const target = undoFor;
             setUndoFor(null);
-            runUndo(target.batchId, roots);
+            void runUndo(target.batchId, roots);
           }}
         />
       ) : null}

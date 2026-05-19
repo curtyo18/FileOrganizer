@@ -130,7 +130,7 @@ export async function runCli(argv: string[]): Promise<CliResult> {
 const entryArg = process.argv[1];
 const isMain = entryArg ? import.meta.url === pathToFileURL(entryArg).href : false;
 if (isMain) {
-  runCli(process.argv.slice(2)).then((r) => {
+  void runCli(process.argv.slice(2)).then((r) => {
     if (r.stdout) process.stdout.write(r.stdout + '\n');
     if (r.stderr) process.stderr.write(r.stderr + '\n');
     process.exit(r.exitCode);
