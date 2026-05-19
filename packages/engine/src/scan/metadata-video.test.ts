@@ -59,7 +59,7 @@ describe('extractVideoMetadata', () => {
     expect(meta).toEqual({ exifDate: null, width: null, height: null, durationSeconds: null });
   });
 
-  it('logs warn with metadata-video-error (phase execFile) when execFile throws, and returns null metadata', async () => {
+  it.skipIf(process.platform === 'win32')('logs warn with metadata-video-error (phase execFile) when execFile throws, and returns null metadata', async () => {
     // Create a real binary that exists so we pass the existsSync check,
     // but make it exit with a non-zero status to trigger the execFile catch.
     const tmpDir = mkdtempSync(join(tmpdir(), 'fileorg-vidmeta-err-'));
@@ -99,7 +99,7 @@ describe('extractVideoMetadata', () => {
     expect(typeof w.fields['err']).toBe('string');
   });
 
-  it('happy path: returns parsed metadata when a real fake-binary emits canned MediaInfo JSON', async () => {
+  it.skipIf(process.platform === 'win32')('happy path: returns parsed metadata when a real fake-binary emits canned MediaInfo JSON', async () => {
     // Create a real shell script that acts as a fake MediaInfo binary.
     // This tests the full execFileAsync → parseMediainfoOutput pipeline
     // without needing to mock the already-promisified execFile closure.

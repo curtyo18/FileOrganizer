@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { walk, type WalkOptions, MAX_DEPTH } from './walker.js';
 import type { Logger } from '../log.js';
+import { drain } from '../test-helpers/iter.js';
 
 let root: string;
 
@@ -75,11 +76,14 @@ describe('walk', () => {
 
   it('reports size and mtime for emitted files', async () => {
     touch('a.jpg', 'hello');
+    const entries = [];
     for await (const entry of walk({ ...opts, roots: [root] })) {
-      expect(entry.sizeBytes).toBe(5);
-      expect(typeof entry.mtime).toBe('string');
-      expect(entry.extension).toBe('jpg');
+      entries.push(entry);
     }
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.sizeBytes).toBe(5);
+    expect(typeof entries[0]!.mtime).toBe('string');
+    expect(entries[0]!.extension).toBe('jpg');
   });
 });
 
@@ -135,14 +139,11 @@ describe('walk onEmptyDir', () => {
   it('emits onEmptyDir deepest-first as it unwinds', async () => {
     mkdirSync(join(root, 'a', 'b', 'c'), { recursive: true });
     const fired: string[] = [];
-    for await (const _ of walk({
+    await drain(walk({
       ...opts,
       roots: [root],
       onEmptyDir: (p) => fired.push(p),
-    })) {
-      // drain
-      void _;
-    }
+    }));
     expect(fired).toEqual([
       join(root, 'a', 'b', 'c'),
       join(root, 'a', 'b'),
@@ -155,14 +156,12 @@ describe('walk onEmptyDir', () => {
     const controller = new AbortController();
     controller.abort();
     const fired: string[] = [];
-    for await (const _ of walk({
+    await drain(walk({
       ...opts,
       roots: [root],
       signal: controller.signal,
       onEmptyDir: (p) => fired.push(p),
-    })) {
-      void _;
-    }
+    }));
     expect(fired).toHaveLength(0);
   });
 
@@ -173,7 +172,7 @@ describe('walk onEmptyDir', () => {
     const controller = new AbortController();
     const fired: string[] = [];
     let i = 0;
-    for await (const _ of walk({
+    await drain(walk({
       ...opts,
       roots: [root],
       signal: controller.signal,
@@ -182,9 +181,7 @@ describe('walk onEmptyDir', () => {
         i += 1;
         if (i === 5) controller.abort();
       },
-    })) {
-      void _;
-    }
+    }));
     // Walker checks signal at the top of each child iteration. With 50
     // sibling empty leaves, aborting from inside the 5th callback leaves
     // exactly 5 callbacks fired.

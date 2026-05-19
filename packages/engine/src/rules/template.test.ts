@@ -74,4 +74,29 @@ describe('renderTemplate', () => {
     const file = makeFile({ exifDate: '2023-01-01T00:00:00.000Z', dateSource: 'exif' });
     expect(() => renderTemplate('{bogus}', file, 'PRIMARY')).toThrow(RuleError);
   });
+
+  it('passes through forward-slash in {filename} as-is (caller is responsible for path safety)', () => {
+    // A filename containing '/' is not sanitised by renderTemplate — the output
+    // will contain the slash exactly as given.  Callers that use the result as a
+    // filesystem path must validate or sanitise the rendered string themselves.
+    const file = makeFile({
+      exifDate: '2023-01-01T00:00:00.000Z',
+      dateSource: 'exif',
+      name: 'sub/malicious.jpg',
+    });
+    const out = renderTemplate('{year}/{filename}', file, 'PRIMARY');
+    expect(out).toBe('2023/sub/malicious.jpg');
+  });
+
+  it('passes through backslash in {filename} as-is (caller is responsible for path safety)', () => {
+    // A filename containing '\\' is not sanitised by renderTemplate — the output
+    // will contain the backslash exactly as given.
+    const file = makeFile({
+      exifDate: '2023-01-01T00:00:00.000Z',
+      dateSource: 'exif',
+      name: 'sub\\malicious.jpg',
+    });
+    const out = renderTemplate('{year}/{filename}', file, 'PRIMARY');
+    expect(out).toBe('2023/sub\\malicious.jpg');
+  });
 });

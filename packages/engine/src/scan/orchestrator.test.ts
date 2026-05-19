@@ -10,7 +10,7 @@ import { ScansRepo } from '../catalog/scans-repo.js';
 import { runScan } from './orchestrator.js';
 import { ThrottleManager } from '../throttle/manager.js';
 import { defaultThrottleProfiles, DEFAULT_CATEGORY_MAP, ScanError } from '@fileorganizer/shared';
-import { createLogger } from '../log.js';
+import { silentLogger } from '../test-helpers/log.js';
 
 let dir: string;
 let db: Catalog;
@@ -52,8 +52,7 @@ describe('runScan', () => {
     fixture('a.jpg', 'aaa');
     fixture('b.pdf', 'bbb');
     fixture('skip.exe', 'xxx');
-    const writes: string[] = [];
-    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const log = silentLogger();
     const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
     const result = await runScan({
       db, driveId, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
@@ -72,8 +71,7 @@ describe('runScan', () => {
 
   it('skips re-hashing unchanged files on second scan', async () => {
     fixture('a.jpg', 'aaa');
-    const writes: string[] = [];
-    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const log = silentLogger();
     const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
     const opts = {
       db, driveId, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
@@ -87,8 +85,7 @@ describe('runScan', () => {
 
   it('marks files missing on rescan when they disappeared', async () => {
     const a = fixture('a.jpg', 'aaa');
-    const writes: string[] = [];
-    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const log = silentLogger();
     const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
     const opts = {
       db, driveId, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
@@ -105,8 +102,7 @@ describe('runScan', () => {
     for (let i = 0; i < 1000; i += 1) {
       fixture(`f${String(i).padStart(4, '0')}.jpg`, `payload-${i}`.repeat(50));
     }
-    const writes: string[] = [];
-    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const log = silentLogger();
     const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
     const controller = new AbortController();
     const promise = runScan({
@@ -135,8 +131,7 @@ describe('runScan', () => {
     mkdirSync(join(scanRoot, 'fully-empty', 'deep'), { recursive: true });
     // sibling of keeper that's empty
     mkdirSync(join(scanRoot, 'keeper', 'empty-sibling'), { recursive: true });
-    const writes: string[] = [];
-    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const log = silentLogger();
     const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
     await runScan({
       db, driveId, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
@@ -161,8 +156,7 @@ describe('runScan', () => {
     mkdirSync(join(scanRoot, 'gone'), { recursive: true });
     mkdirSync(join(scanRoot, 'becomes-occupied'), { recursive: true });
     mkdirSync(join(scanRoot, 'still-empty'), { recursive: true });
-    const writes: string[] = [];
-    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const log = silentLogger();
     const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
     const baseOpts = {
       db, driveId, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
@@ -194,8 +188,7 @@ describe('runScan', () => {
 
   it('does not prune empty-dir rows when the scan is cancelled', async () => {
     mkdirSync(join(scanRoot, 'pre-existing'), { recursive: true });
-    const writes: string[] = [];
-    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const log = silentLogger();
     const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
     await runScan({
       db, driveId, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
@@ -228,8 +221,7 @@ describe('runScan', () => {
 
   it('persists a scans row with completed status', async () => {
     fixture('a.jpg', 'aaa');
-    const writes: string[] = [];
-    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const log = silentLogger();
     const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
     const result = await runScan({
       db, driveId, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
@@ -262,8 +254,7 @@ describe('runScan — volume serial pre-flight', () => {
       totalBytes: 1_000_000_000,
       freeBytes: 500_000_000,
     });
-    const writes: string[] = [];
-    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const log = silentLogger();
     const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
 
     let caught: unknown;
@@ -289,8 +280,7 @@ describe('runScan — volume serial pre-flight', () => {
     // so the pre-flight is skipped for them.  This verifies that skip is correct
     // and the scan proceeds without a false VOLUME_SERIAL_MISMATCH.
     fixture('a.jpg', 'aaa');
-    const writes: string[] = [];
-    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const log = silentLogger();
     const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
 
     // driveId from beforeEach has volumeSerial='X' (non-synth, no mountPath=null).
@@ -313,8 +303,7 @@ describe('runScan — volume serial pre-flight', () => {
       totalBytes: 1_000_000_000,
       freeBytes: 500_000_000,
     });
-    const writes: string[] = [];
-    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const log = silentLogger();
     const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
 
     await runScan({
