@@ -25,7 +25,6 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
-    "@types/picomatch": "^4.0.3",
-    "piexifjs": "^1.0.6"
+    "@types/picomatch": "^4.0.3"
   }
 }

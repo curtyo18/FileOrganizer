@@ -1,6 +1,4 @@
 import sharp from 'sharp';
-import { readFileSync, writeFileSync } from 'node:fs';
-import piexif from 'piexifjs';
 
 export async function buildPlainJpeg(outPath: string): Promise<void> {
   await sharp({
@@ -11,21 +9,22 @@ export async function buildPlainJpeg(outPath: string): Promise<void> {
 }
 
 export async function buildJpegWithExifDate(outPath: string): Promise<void> {
-  await buildPlainJpeg(outPath);
-  const bytes = readFileSync(outPath);
-  const dataUrl = `data:image/jpeg;base64,${bytes.toString('base64')}`;
-  const exif = {
-    '0th': {},
-    Exif: {
-      [piexif.ExifIFD.DateTimeOriginal]: '2023:08:15 14:23:01',
-    },
-    GPS: {},
-    Interop: {},
-    '1st': {},
-    thumbnail: null,
-  };
-  const exifStr = piexif.dump(exif);
-  const updated = piexif.insert(exifStr, dataUrl);
-  const base64 = updated.split(',')[1] ?? '';
-  writeFileSync(outPath, Buffer.from(base64, 'base64'));
+  // Sharp's withMetadata({ exif }) can write IFD2 (Exif sub-IFD) tags
+  // directly, replacing the previous piexifjs-based approach.
+  // piexifjs (devDep) has been removed: sharp already ships as a production
+  // dep and its native EXIF write path is sufficient for our test fixture
+  // needs. Spike confirmed DateTimeOriginal round-trips correctly via
+  // exifr.parse({ reviveValues: false }).
+  await sharp({
+    create: { width: 4, height: 4, channels: 3, background: { r: 0, g: 0, b: 0 } },
+  })
+    .withMetadata({
+      exif: {
+        IFD2: {
+          DateTimeOriginal: '2023:08:15 14:23:01',
+        },
+      },
+    })
+    .jpeg()
+    .toFile(outPath);
 }

@@ -1,3 +1,11 @@
+// Dependency note: we stay on exifr (single package, ESM-friendly, low-dep,
+// read-only EXIF/XMP parsing).
+// Alternatives considered and rejected:
+//   - @exifr/parse: split-package variant, less stable API surface.
+//   - exiftool-vendored: ships a binary subprocess, heavyweight for our
+//     read-only needs.
+//   - node-exif: unmaintained (last npm release 2017).
+// exifr last npm release: 2022-05-01T21:24:18.198Z
 import exifr from 'exifr';
 import type { Logger } from '../log.js';
 
