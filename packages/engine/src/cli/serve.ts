@@ -1,3 +1,4 @@
+import { createLogger, defaultWriter } from '../log.js';
 import { readPointer, writePointer, defaultCatalogPath } from '../catalog/locator.js';
 import { openCatalog, closeCatalog, assertCatalogHealthy } from '../catalog/connection.js';
 import { migrate } from '../catalog/migrate.js';
@@ -104,12 +105,22 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
   console.log('  Press Ctrl+C to stop.');
   console.log('');
 
+  const log = createLogger({ level: 'info', write: defaultWriter });
+
   await new Promise<void>((resolve) => {
-    const shutdown = async () => {
+    const shutdown = async (): Promise<void> => {
       scheduler?.stop();
       clearInterval(optimizerHandle);
-      await server.close();
-      closeCatalog(db);
+      try {
+        await server.close();
+      } catch (err) {
+        log.error('shutdown-server-close-failed', { err: (err as Error).message });
+      }
+      try {
+        closeCatalog(db);
+      } catch (err) {
+        log.error('shutdown-catalog-close-failed', { err: (err as Error).message });
+      }
       resolve();
     };
     process.on('SIGINT', () => void shutdown());

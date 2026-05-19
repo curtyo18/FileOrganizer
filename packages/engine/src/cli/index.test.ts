@@ -65,6 +65,45 @@ describe('CLI corrupt catalog', () => {
   });
 });
 
+describe('CLI parseArgs', () => {
+  it('parseArgs splits on first = so --catalog=/foo works', async () => {
+    const pointerPath = join(dir, 'pointer.json');
+    const catalogPath = join(dir, 'cat.db');
+    // Pass --pointer and --catalog as --flag=value form
+    const result = await runCli([
+      'init',
+      `--pointer=${pointerPath}`,
+      `--catalog=${catalogPath}`,
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(existsSync(pointerPath)).toBe(true);
+    expect(existsSync(catalogPath)).toBe(true);
+  });
+});
+
+describe('CLI unknown command', () => {
+  it('prints help to stderr after the error line', async () => {
+    const result = await runCli(['bogus']);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain('unknown command: bogus');
+    expect(result.stderr).toContain('Commands:');
+  });
+});
+
+describe('CLI --version', () => {
+  it('--version writes version to stdout and exits 0', async () => {
+    const result = await runCli(['--version']);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/\d+\.\d+\.\d+/);
+  });
+
+  it('-V short form writes version to stdout and exits 0', async () => {
+    const result = await runCli(['-V']);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/\d+\.\d+\.\d+/);
+  });
+});
+
 describe('CLI scan', () => {
   it('runs a scan over a temp directory and reports indexed count', async () => {
     const dir2 = mkdtempSync(join(tmpdir(), 'fileorg-cli-scan-'));
