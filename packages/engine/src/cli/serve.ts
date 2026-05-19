@@ -1,5 +1,5 @@
 import { readPointer, writePointer, defaultCatalogPath } from '../catalog/locator.js';
-import { openCatalog, closeCatalog } from '../catalog/connection.js';
+import { openCatalog, closeCatalog, assertCatalogHealthy } from '../catalog/connection.js';
 import { migrate } from '../catalog/migrate.js';
 import { SettingsRepo } from '../catalog/settings-repo.js';
 import { seedDefaultRules } from '../rules/defaults.js';
@@ -25,6 +25,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
     const initDb = openCatalog(catalogPath);
     try {
       migrate(initDb);
+      assertCatalogHealthy(initDb, catalogPath);
       new SettingsRepo(initDb).load();
       seedDefaultRoles(initDb);
       seedDefaultRules(initDb);
@@ -36,6 +37,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
   }
   const db = openCatalog(ptr.catalogPath);
   migrate(db);
+  assertCatalogHealthy(db, ptr.catalogPath);
   seedDefaultRoles(db);
   seedDefaultRules(db);
 

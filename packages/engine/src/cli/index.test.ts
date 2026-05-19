@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync, openSync, writeSync, closeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runCli } from './index.js';
+import { openCatalog, closeCatalog } from '../catalog/connection.js';
+import { migrate } from '../catalog/migrate.js';
 
 let dir: string;
 
@@ -36,6 +38,30 @@ describe('CLI', () => {
   it('exits 2 on unknown command', async () => {
     const result = await runCli(['nope']);
     expect(result.exitCode).toBe(2);
+  });
+});
+
+describe('CLI corrupt catalog', () => {
+  it('init exits non-zero with CATALOG_CORRUPT in stderr when catalog is corrupted', async () => {
+    const pointerPath = join(dir, 'pointer.json');
+    const catalogPath = join(dir, 'cat.db');
+
+    // Build a healthy catalog first so we have a valid migrated file to corrupt.
+    const db = openCatalog(catalogPath);
+    migrate(db);
+    db.pragma('wal_checkpoint(TRUNCATE)');
+    closeCatalog(db);
+
+    // Corrupt the freelist trunk pointer (offset 32-35) to page 9999 — same
+    // technique as the unit test: opens fine but integrity_check reports errors.
+    const fd = openSync(catalogPath, 'r+');
+    writeSync(fd, Buffer.from([0x00, 0x00, 0x27, 0x0f]), 0, 4, 32);
+    closeSync(fd);
+
+    const result = await runCli(['init', '--pointer', pointerPath, '--catalog', catalogPath]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('CATALOG_CORRUPT');
+    expect(result.stderr).toContain(catalogPath);
   });
 });
 
