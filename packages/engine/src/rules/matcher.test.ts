@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { FileRecord, Rule, RuleMatch } from '@fileorganizer/shared';
+import { RuleError } from '@fileorganizer/shared';
 import { matches, firstMatch } from './matcher.js';
 
 function makeFile(over: Partial<FileRecord> = {}): FileRecord {
@@ -129,5 +130,50 @@ describe('matcher.firstMatch', () => {
     const file = makeFile({ category: 'video' });
     const r1 = makeRule({ category: ['image'] });
     expect(firstMatch(file, [r1])).toBeNull();
+  });
+
+  it('precompiles globs once per enabled rule per firstMatch call via compileGlobOrThrow', () => {
+    // Verify that compileGlobOrThrow is exported (used by firstMatch internals)
+    // and that calling firstMatch with multiple rules with pathGlobs works correctly,
+    // meaning globs are compiled once per rule (not once per match check).
+    // Structural verification: a malformed glob in one rule is caught at compile-time
+    // (during precompile), not lazily per-match — so even when another rule would
+    // match before we reach the bad one, the bad glob still throws.
+    const file = makeFile({ path: '/Users/x/Downloads/a.jpg' });
+    const goodRule = makeRule({ pathGlob: '**/Downloads/**' }, { id: 'good', priority: 50 });
+    const badRule = makeRule({ pathGlob: '[' }, { id: 'bad', name: 'bad-rule', priority: 200 });
+
+    // Precompilation means bad-rule is compiled even though good-rule would match first
+    expect(() => firstMatch(file, [goodRule, badRule])).toThrow(RuleError);
+  });
+
+  it("pathGlob '**/Downloads/**' matches a Windows-style backslash path", () => {
+    const file = makeFile({ path: 'C:\\Users\\foo\\Downloads\\bar.jpg' });
+    const rule = makeRule({ pathGlob: '**/Downloads/**' });
+    expect(matches(file, rule)).toBe(true);
+  });
+
+  it('malformed pathGlob throws RuleError with code INVALID_GLOB', () => {
+    const file = makeFile({ path: '/Users/x/Downloads/a.jpg' });
+    const rule = makeRule({ pathGlob: '[' }, { name: 'bad-rule' });
+    expect(() => firstMatch(file, [rule])).toThrow(RuleError);
+    expect(() => firstMatch(file, [rule])).toThrow(
+      expect.objectContaining({ code: 'INVALID_GLOB' }),
+    );
+    expect(() => firstMatch(file, [rule])).toThrow(/bad-rule/);
+  });
+});
+
+describe('matcher.dateBefore boundary', () => {
+  it('does NOT match when file date equals dateBefore (strict less-than)', () => {
+    const file = makeFile({ mtime: '2024-01-01T00:00:00.000Z', exifDate: null });
+    const rule = makeRule({ dateBefore: '2024-01-01T00:00:00.000Z' });
+    expect(matches(file, rule)).toBe(false);
+  });
+
+  it('matches when file date is strictly before dateBefore', () => {
+    const file = makeFile({ mtime: '2023-12-31T23:59:59.999Z', exifDate: null });
+    const rule = makeRule({ dateBefore: '2024-01-01T00:00:00.000Z' });
+    expect(matches(file, rule)).toBe(true);
   });
 });

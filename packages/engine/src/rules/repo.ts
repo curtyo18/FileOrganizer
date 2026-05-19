@@ -71,10 +71,9 @@ export class RulesRepo {
   }
 
   list(): Rule[] {
-    const rows = this.db.prepare(`SELECT * FROM rules ORDER BY priority ASC`).all() as Record<
-      string,
-      unknown
-    >[];
+    const rows = this.db
+      .prepare(`SELECT * FROM rules ORDER BY priority ASC, created_at ASC, name ASC`)
+      .all() as Record<string, unknown>[];
     return rows.map(toRule);
   }
 

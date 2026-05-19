@@ -116,4 +116,47 @@ describe('RulesRepo', () => {
     expect(repo.findById(r.id)).toBeNull();
     expect(repo.list()).toHaveLength(0);
   });
+
+  it('equal-priority rules ordered by created_at ASC then name ASC', () => {
+    const repo = new RulesRepo(db);
+    // Insert with explicit delays to ensure distinct created_at values aren't needed —
+    // we rely on the name tiebreaker since SQLite CURRENT_TIMESTAMP is second-precision.
+    // Insert three rules at the same priority; the DB assigns created_at via DEFAULT.
+    // To make created_at ordering deterministic without sleeping, we insert them and
+    // rely on name tiebreaker (rowid order can differ from alphabetical).
+    repo.create({
+      name: 'charlie',
+      priority: 100,
+      match: {},
+      destinationRole: 'misc',
+      destinationTemplate: '{filename}',
+      movePolicy: 'always-review',
+      quarantinePolicy: 'default',
+    });
+    repo.create({
+      name: 'alpha',
+      priority: 100,
+      match: {},
+      destinationRole: 'misc',
+      destinationTemplate: '{filename}',
+      movePolicy: 'always-review',
+      quarantinePolicy: 'default',
+    });
+    repo.create({
+      name: 'bravo',
+      priority: 100,
+      match: {},
+      destinationRole: 'misc',
+      destinationTemplate: '{filename}',
+      movePolicy: 'always-review',
+      quarantinePolicy: 'default',
+    });
+
+    const list = repo.list();
+    expect(list).toHaveLength(3);
+    // All same priority and same created_at second → name tiebreaker applies
+    expect(list[0]!.name).toBe('alpha');
+    expect(list[1]!.name).toBe('bravo');
+    expect(list[2]!.name).toBe('charlie');
+  });
 });
