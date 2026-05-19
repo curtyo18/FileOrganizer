@@ -22,6 +22,7 @@ export interface WalkEntry {
   sizeBytes: number;
   mtime: string;
   ctime: string;
+  ino: string;
 }
 
 export async function* walk(opts: WalkOptions): AsyncIterable<WalkEntry> {
@@ -93,6 +94,7 @@ async function* walkOne(
               sizeBytes: targetStat.size,
               mtime: targetStat.mtime.toISOString(),
               ctime: targetStat.ctime.toISOString(),
+              ino: targetStat.ino.toString(),
             };
             yieldedCount += 1;
           }
@@ -146,6 +148,7 @@ async function* walkOne(
         sizeBytes: fileStat.size,
         mtime: fileStat.mtime.toISOString(),
         ctime: fileStat.ctime.toISOString(),
+        ino: fileStat.ino.toString(),
       };
       yieldedCount += 1;
     }

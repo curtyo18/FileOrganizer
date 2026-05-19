@@ -182,7 +182,7 @@ export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
           width,
           height,
           durationSeconds,
-          ntfsFileId: null,
+          ntfsFileId: entry.ino,
           state: 'indexed',
           scanId: scan.id,
         });
