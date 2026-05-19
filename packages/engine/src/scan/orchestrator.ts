@@ -97,6 +97,7 @@ export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
       extensions: allowedExtensions,
       excluded: DEFAULT_EXCLUDED_NAMES,
       extraExcluded: opts.extraExcluded ?? [],
+      log,
       onEmptyDir: (path) =>
         emptyDirsRepo.upsert(opts.driveId, path, scan.id, new Date().toISOString()),
     };
@@ -155,12 +156,12 @@ export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
         let height: number | null = null;
         let durationSeconds: number | null = null;
         if (category === 'image') {
-          const m = await extractImageMetadata(entry.path);
+          const m = await extractImageMetadata(entry.path, { log });
           exifDate = m.exifDate;
           width = m.width;
           height = m.height;
         } else if (category === 'video') {
-          const m = await extractVideoMetadata(entry.path, { binaryPath: opts.mediainfoPath });
+          const m = await extractVideoMetadata(entry.path, { binaryPath: opts.mediainfoPath, log });
           exifDate = m.exifDate;
           width = m.width;
           height = m.height;

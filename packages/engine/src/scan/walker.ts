@@ -54,9 +54,10 @@ async function* walkOne(
   let entries: import('node:fs').Dirent[];
   try {
     entries = await readdir(dir, { withFileTypes: true });
-  } catch {
+  } catch (err) {
     // Unreadable subtree: treat as non-empty so the parent isn't classified
     // empty just because we couldn't see this child's contents.
+    opts.log?.warn('walker-readdir-error', { path: dir, err: (err as Error).message });
     return 1;
   }
   let yieldedCount = 0;
@@ -79,8 +80,9 @@ async function* walkOne(
         let targetStat: Awaited<ReturnType<typeof stat>>;
         try {
           targetStat = await stat(childPath); // stat follows symlinks
-        } catch {
+        } catch (err) {
           // Broken symlink or permission error — skip safely.
+          opts.log?.warn('walker-stat-error', { path: childPath, kind: 'symlink', err: (err as Error).message });
           continue;
         }
         if (!targetStat.isDirectory()) {
@@ -138,7 +140,8 @@ async function* walkOne(
       let fileStat: Awaited<ReturnType<typeof stat>>;
       try {
         fileStat = await stat(childPath);
-      } catch {
+      } catch (err) {
+        opts.log?.warn('walker-stat-error', { path: childPath, kind: 'file', err: (err as Error).message });
         continue;
       }
       yield {

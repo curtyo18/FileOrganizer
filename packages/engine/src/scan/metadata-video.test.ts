@@ -4,6 +4,7 @@ import { extractVideoMetadata, parseMediainfoOutput } from './metadata-video.js'
 import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Logger } from '../log.js';
 
 describe('parseMediainfoOutput', () => {
   it('returns null exifDate when no recorded date', () => {
@@ -39,10 +40,63 @@ describe('parseMediainfoOutput', () => {
   });
 });
 
+function makeLogger(): { logger: Logger; warns: Array<{ msg: string; fields: Record<string, unknown> }> } {
+  const warns: Array<{ msg: string; fields: Record<string, unknown> }> = [];
+  const noop = () => {};
+  const logger: Logger = {
+    debug: noop,
+    info: noop,
+    warn: (msg, fields) => warns.push({ msg, fields: fields ?? {} }),
+    error: noop,
+    child: () => logger,
+  };
+  return { logger, warns };
+}
+
 describe('extractVideoMetadata', () => {
   it('returns blank metadata when binary path is missing', async () => {
     const meta = await extractVideoMetadata('/does/not/exist.mp4', { binaryPath: '/no/such/binary' });
     expect(meta).toEqual({ exifDate: null, width: null, height: null, durationSeconds: null });
+  });
+
+  it('logs warn with metadata-video-error (phase execFile) when execFile throws, and returns null metadata', async () => {
+    // Create a real binary that exists so we pass the existsSync check,
+    // but make it exit with a non-zero status to trigger the execFile catch.
+    const tmpDir = mkdtempSync(join(tmpdir(), 'fileorg-vidmeta-err-'));
+    const fakeBinary = join(tmpDir, 'mediainfo-fail.sh');
+    writeFileSync(fakeBinary, '#!/bin/sh\nexit 1', { mode: 0o755 });
+
+    const { logger, warns } = makeLogger();
+    try {
+      const meta = await extractVideoMetadata('/video/sample.mp4', {
+        binaryPath: fakeBinary,
+        log: logger,
+      });
+      expect(meta).toEqual({ exifDate: null, width: null, height: null, durationSeconds: null });
+      expect(warns).toHaveLength(1);
+      const w = warns[0]!;
+      expect(w.msg).toBe('metadata-video-error');
+      expect(w.fields['path']).toBe('/video/sample.mp4');
+      expect(w.fields['phase']).toBe('execFile');
+      expect(typeof w.fields['err']).toBe('string');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('logs warn with metadata-video-error (phase parse) when JSON is invalid, and returns null metadata', async () => {
+    const { logger, warns } = makeLogger();
+    const result = parseMediainfoOutput('not-valid-json', {
+      log: logger,
+      path: '/video/sample.mp4',
+    });
+    expect(result).toEqual({ exifDate: null, width: null, height: null, durationSeconds: null });
+    expect(warns).toHaveLength(1);
+    const w = warns[0]!;
+    expect(w.msg).toBe('metadata-video-error');
+    expect(w.fields['path']).toBe('/video/sample.mp4');
+    expect(w.fields['phase']).toBe('parse');
+    expect(typeof w.fields['err']).toBe('string');
   });
 
   it('happy path: returns parsed metadata when a real fake-binary emits canned MediaInfo JSON', async () => {

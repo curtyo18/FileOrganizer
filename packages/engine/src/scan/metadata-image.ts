@@ -1,4 +1,5 @@
 import exifr from 'exifr';
+import type { Logger } from '../log.js';
 
 export interface ImageMetadata {
   exifDate: string | null;
@@ -30,7 +31,14 @@ function exifDateToIso(value: unknown): string | null {
   return `${y}-${mo}-${d}T${h}:${mi}:${s}.000Z`;
 }
 
-export async function extractImageMetadata(path: string): Promise<ImageMetadata> {
+export interface ExtractImageOptions {
+  log?: Logger;
+}
+
+export async function extractImageMetadata(
+  path: string,
+  opts?: ExtractImageOptions,
+): Promise<ImageMetadata> {
   try {
     const data = await exifr.parse(path, PARSE_OPTS as object);
     if (!data) return { exifDate: null, width: null, height: null };
@@ -56,7 +64,8 @@ export async function extractImageMetadata(path: string): Promise<ImageMetadata>
           ? data.ImageHeight
           : null;
     return { exifDate, width, height };
-  } catch {
+  } catch (err) {
+    opts?.log?.warn('metadata-image-error', { path, err: (err as Error).message });
     return { exifDate: null, width: null, height: null };
   }
 }
