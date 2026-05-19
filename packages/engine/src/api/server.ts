@@ -6,8 +6,10 @@ import { createReadStream, existsSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
+import type { Context } from 'hono';
 import sharp from 'sharp';
 import { ensurePreviewCacheDir, getOrCreatePreview } from './preview-cache.js';
+import { SettingsSchema, CreateRoleInputSchema, UpdateRoleInputSchema } from './validators.js';
 import type { Catalog } from '../catalog/connection.js';
 import { DriveRepo } from '../drives/repo.js';
 import { ScansRepo } from '../catalog/scans-repo.js';
@@ -26,7 +28,16 @@ import { planOrganize, type PlannedOperation } from '../organize/planner.js';
 import { applyApprovedBatch, autoApply } from '../organize/applier.js';
 import { undoBatch } from '../organize/undo.js';
 import { findEmptyDirs, removeEmptyDirs } from '../cleanup/empty-dirs.js';
-import { defaultThrottleProfiles, DriveError, RuleError, ScanError, type Settings } from '@fileorganizer/shared';
+import {
+  defaultThrottleProfiles,
+  CatalogError,
+  DriveError,
+  IntegrityError,
+  QuarantineError,
+  RuleError,
+  ScanError,
+  type Settings,
+} from '@fileorganizer/shared';
 import { EventBus } from './events.js';
 
 export interface CreateServerOptions {
@@ -50,9 +61,38 @@ export interface ServerHandle {
 const COPY_CHUNK_BYTES = 1024 * 1024;
 const CACHE_CONTROL_MAX_AGE = 'max-age=300';
 
+async function parseJsonBody<T>(c: Context): Promise<T | null> {
+  try {
+    return (await c.req.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
 export async function createServer(opts: CreateServerOptions): Promise<ServerHandle> {
   const app = new Hono();
   const events = new EventBus();
+
+  // Centralised error handler. Maps typed domain errors to structured responses.
+  // Unknown errors are logged and returned as a generic 500 to avoid leaking
+  // internal details (stack traces, DB messages, file paths) to callers.
+  app.onError((err, c) => {
+    if (err instanceof RuleError) return c.json({ error: err.message, code: err.code }, 400);
+    if (err instanceof DriveError) return c.json({ error: err.message, code: err.code }, 503);
+    if (err instanceof QuarantineError) return c.json({ error: err.message, code: err.code }, 400);
+    if (err instanceof IntegrityError) return c.json({ error: err.message, code: err.code }, 400);
+    if (err instanceof CatalogError) return c.json({ error: err.message, code: err.code }, 500);
+    if (err instanceof ScanError) {
+      const status =
+        err.code === 'VOLUME_SERIAL_MISMATCH' ? 409
+        : err.code === 'DRIVE_NOT_FOUND' ? 404
+        : err.code === 'DRIVE_DISCONNECTED' ? 503
+        : 500;
+      return c.json({ error: err.message, code: err.code }, status);
+    }
+    console.error('api-internal-error', { url: c.req.url, err: (err as Error).message });
+    return c.json({ error: 'internal' }, 500);
+  });
 
   // 8 MB cap on all routes. GETs don't send bodies so this is a no-op for
   // them. The largest expected mutation payload is a JSON operation list
@@ -80,13 +120,14 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     return c.json({ scan: s });
   });
   app.post('/api/scans', async (c) => {
-    const body = (await c.req.json()) as {
+    const body = await parseJsonBody<{
       driveId?: string;
       rootPath?: string;
       rootPaths?: string[];
       profile?: 'idle' | 'balanced' | 'full-send';
       mediainfoPath?: string;
-    };
+    }>(c);
+    if (!body) return c.json({ error: 'invalid-json' }, 400);
 
     // Resolve drive: either by explicit driveId, or by discovering it from rootPath.
     let drive = body.driveId ? drives.list().find((d) => d.id === body.driveId) ?? null : null;
@@ -192,19 +233,10 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     try {
       await Promise.race([onStartFired, promise]);
     } catch (err) {
-      if (err instanceof ScanError) {
-        const code = err.code;
-        const status =
-          code === 'VOLUME_SERIAL_MISMATCH' ? 409 :
-          code === 'DRIVE_NOT_FOUND' ? 404 :
-          code === 'DRIVE_DISCONNECTED' ? 503 :
-          500;
-        return c.json({ error: err.message, code }, status);
-      }
-      if (err instanceof DriveError && err.code === 'DRIVE_DISCONNECTED') {
-        return c.json({ error: err.message, code: err.code }, 503);
-      }
-      return c.json({ error: (err as Error).message ?? 'scan failed' }, 500);
+      // ScanError and DriveError are typed — let onError map them to the right
+      // status codes. Any other error also propagates to onError to avoid leaking
+      // internal messages verbatim.
+      throw err;
     }
     const scan = scans.findById(registeredId!);
     return c.json({ scan }, 201);
@@ -228,8 +260,10 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   app.get('/api/files', (c) => {
     const driveId = c.req.query('driveId');
     if (!driveId) return c.json({ error: 'driveId required' }, 400);
-    const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10), 1000);
-    const offset = Math.max(parseInt(c.req.query('offset') ?? '0', 10), 0);
+    const rawLimit = Number(c.req.query('limit'));
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 1000) : 100;
+    const rawOffset = Number(c.req.query('offset'));
+    const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? Math.floor(rawOffset) : 0;
     const rows = opts.db
       .prepare(
         `SELECT id, drive_id AS driveId, path, name, extension, size_bytes AS sizeBytes,
@@ -359,10 +393,11 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   });
 
   app.post('/api/duplicates/apply', async (c) => {
-    const body = (await c.req.json()) as {
+    const body = await parseJsonBody<{
       operations: DedupeOperation[];
       driveRoots?: Record<string, string>;
-    };
+    }>(c);
+    if (!body) return c.json({ error: 'invalid-json' }, 400);
     if (!Array.isArray(body.operations)) {
       return c.json({ error: 'operations must be an array' }, 400);
     }
@@ -406,10 +441,11 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   });
 
   app.post('/api/quarantine/restore', async (c) => {
-    const body = (await c.req.json()) as {
+    const body = await parseJsonBody<{
       quarantineIds: number[];
       driveRoots?: Record<string, string>;
-    };
+    }>(c);
+    if (!body) return c.json({ error: 'invalid-json' }, 400);
     if (!Array.isArray(body.quarantineIds)) {
       return c.json({ error: 'quarantineIds must be an array' }, 400);
     }
@@ -453,10 +489,20 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   app.get('/api/settings', (c) => c.json({ settings: settingsRepo.load() }));
 
   app.put('/api/settings', async (c) => {
-    const body = (await c.req.json()) as { settings: Settings };
-    settingsRepo.save(body.settings);
-    opts.onSettingsChanged?.(body.settings);
-    return c.json({ settings: body.settings });
+    const body = await parseJsonBody<{ settings: unknown }>(c);
+    if (!body) return c.json({ error: 'invalid-json' }, 400);
+    const parsed = SettingsSchema.safeParse(body.settings);
+    if (!parsed.success) {
+      const first = parsed.error.issues[0];
+      return c.json(
+        { error: 'validation', path: first?.path.join('.'), message: first?.message },
+        400,
+      );
+    }
+    const settings = parsed.data as Settings;
+    settingsRepo.save(settings);
+    opts.onSettingsChanged?.(settings);
+    return c.json({ settings });
   });
 
   // Whole-name exclusion match. Wraps the path in `\…\`, normalizes `/`
@@ -516,21 +562,42 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   app.get('/api/roles', (c) => c.json({ roles: roles.list() }));
 
   app.post('/api/roles', async (c) => {
-    const body = (await c.req.json()) as CreateRoleInput;
+    const body = await parseJsonBody<unknown>(c);
+    if (!body) return c.json({ error: 'invalid-json' }, 400);
+    const parsed = CreateRoleInputSchema.safeParse(body);
+    if (!parsed.success) {
+      const first = parsed.error.issues[0];
+      return c.json(
+        { error: 'validation', path: first?.path.join('.'), message: first?.message },
+        400,
+      );
+    }
+    const input = parsed.data as CreateRoleInput;
     try {
-      const role = roles.create(body);
+      const role = roles.create(input);
       return c.json({ role }, 201);
     } catch (err) {
       if (err instanceof RuleError && err.code === 'ROLE_EXISTS') {
         return c.json({ error: err.message }, 409);
       }
-      return c.json({ error: (err as Error).message }, 400);
+      // Other RuleErrors (UNKNOWN_DRIVE_IN_ROLE etc.) propagate to onError → 400 with code.
+      throw err;
     }
   });
 
   app.put('/api/roles/:name', async (c) => {
     const name = c.req.param('name');
-    const patch = (await c.req.json()) as UpdateRoleInput;
+    const body = await parseJsonBody<unknown>(c);
+    if (!body) return c.json({ error: 'invalid-json' }, 400);
+    const parsed = UpdateRoleInputSchema.safeParse(body);
+    if (!parsed.success) {
+      const first = parsed.error.issues[0];
+      return c.json(
+        { error: 'validation', path: first?.path.join('.'), message: first?.message },
+        400,
+      );
+    }
+    const patch = parsed.data as UpdateRoleInput;
     try {
       const role = roles.update(name, patch);
       return c.json({ role });
@@ -538,7 +605,8 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       if (err instanceof RuleError && err.code === 'ROLE_NOT_FOUND') {
         return c.json({ error: err.message }, 404);
       }
-      return c.json({ error: (err as Error).message }, 400);
+      // Other RuleErrors (UNKNOWN_DRIVE_IN_ROLE etc.) propagate to onError → 400 with code.
+      throw err;
     }
   });
 
@@ -550,14 +618,17 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   app.get('/api/rules', (c) => c.json({ rules: rules.list() }));
 
   app.post('/api/rules', async (c) => {
-    const body = (await c.req.json()) as CreateRuleInput;
+    const body = await parseJsonBody<CreateRuleInput>(c);
+    if (!body) return c.json({ error: 'invalid-json' }, 400);
+    // rules.create() may throw RuleError — let it propagate to onError → 400 with code.
     const rule = rules.create(body);
     return c.json({ rule }, 201);
   });
 
   app.put('/api/rules/:id', async (c) => {
     const id = c.req.param('id');
-    const patch = (await c.req.json()) as UpdateRuleInput;
+    const patch = await parseJsonBody<UpdateRuleInput>(c);
+    if (!patch) return c.json({ error: 'invalid-json' }, 400);
     try {
       const rule = rules.update(id, patch);
       return c.json({ rule });
@@ -572,11 +643,12 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   });
 
   app.post('/api/plan/organize', async (c) => {
-    const body = (await c.req.json()) as {
+    const body = await parseJsonBody<{
       driveRoots?: Record<string, string>;
       limit?: number;
       offset?: number;
-    };
+    }>(c);
+    if (!body) return c.json({ error: 'invalid-json' }, 400);
     const rawLimit = typeof body.limit === 'number' && Number.isFinite(body.limit) ? body.limit : 200;
     const limit = Math.min(Math.max(rawLimit, 1), 1000);
     const rawOffset = typeof body.offset === 'number' && Number.isFinite(body.offset) ? body.offset : 0;
@@ -591,10 +663,11 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   });
 
   app.post('/api/organize/auto-apply', async (c) => {
-    const body = (await c.req.json()) as {
+    const body = await parseJsonBody<{
       operations: PlannedOperation[];
       driveRoots?: Record<string, string>;
-    };
+    }>(c);
+    if (!body) return c.json({ error: 'invalid-json' }, 400);
     if (!Array.isArray(body.operations)) {
       return c.json({ error: 'operations must be an array' }, 400);
     }
@@ -622,13 +695,14 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   });
 
   app.post('/api/organize/apply', async (c) => {
-    const body = (await c.req.json()) as {
+    const body = await parseJsonBody<{
       description: string;
       operations: PlannedOperation[];
       driveRoots?: Record<string, string>;
       dryRun?: boolean;
       removeEmptySourceDirs?: boolean;
-    };
+    }>(c);
+    if (!body) return c.json({ error: 'invalid-json' }, 400);
     if (!Array.isArray(body.operations)) {
       return c.json({ error: 'operations must be an array' }, 400);
     }
@@ -657,14 +731,15 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   });
 
   app.post('/api/organize/apply-all', async (c) => {
-    const body = (await c.req.json()) as {
+    const body = await parseJsonBody<{
       description: string;
       driveRoots?: Record<string, string>;
       dryRun?: boolean;
       removeEmptySourceDirs?: boolean;
       ruleIds?: string[];
       kinds?: ('same-drive-move' | 'cross-drive-move')[];
-    };
+    }>(c);
+    if (!body) return c.json({ error: 'invalid-json' }, 400);
     const driveRoots = mergeDriveRoots(drives, body.driveRoots ?? {});
     const plan = planOrganize({ db: opts.db, driveRoots });
     const ruleFilter = Array.isArray(body.ruleIds) ? new Set(body.ruleIds) : null;
@@ -704,19 +779,14 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
 
   app.post('/api/organize/undo/:batchId', async (c) => {
     const batchId = c.req.param('batchId');
-    const body = (await c.req.json().catch(() => ({}))) as {
-      driveRoots?: Record<string, string>;
-    };
-    try {
-      const result = await undoBatch({
-        db: opts.db,
-        batchId,
-        driveRoots: mergeDriveRoots(drives, body.driveRoots ?? {}),
-      });
-      return c.json(result);
-    } catch (err) {
-      return c.json({ error: (err as Error).message }, 400);
-    }
+    const body = (await parseJsonBody<{ driveRoots?: Record<string, string> }>(c)) ?? {};
+    // undoBatch throws typed errors — they propagate to onError for structured responses.
+    const result = await undoBatch({
+      db: opts.db,
+      batchId,
+      driveRoots: mergeDriveRoots(drives, body.driveRoots ?? {}),
+    });
+    return c.json(result);
   });
 
   app.get('/api/cleanup/empty-dirs', (c) => {
@@ -727,7 +797,8 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   });
 
   app.post('/api/cleanup/empty-dirs/apply', async (c) => {
-    const body = (await c.req.json()) as { driveId: string; paths: string[] };
+    const body = await parseJsonBody<{ driveId: string; paths: string[] }>(c);
+    if (!body) return c.json({ error: 'invalid-json' }, 400);
     if (!body.driveId) return c.json({ error: 'driveId required' }, 400);
     if (!Array.isArray(body.paths)) return c.json({ error: 'paths must be an array' }, 400);
     const merged = mergeDriveRoots(drives, {});
@@ -762,7 +833,8 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   });
 
   app.get('/api/batches', (c) => {
-    const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10), 1000);
+    const rawLimit = Number(c.req.query('limit'));
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 1000) : 100;
     return c.json({ batches: batches.list({ limit }) });
   });
 
