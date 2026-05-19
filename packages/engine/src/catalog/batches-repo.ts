@@ -23,6 +23,7 @@ export interface RecordOperationInput {
   preHash?: string | null;
   postHash?: string | null;
   quarantinePath?: string | null;
+  errorMessage?: string | null;
   status: OperationStatus;
 }
 
@@ -66,7 +67,7 @@ export class BatchesRepo {
         op.postHash ?? null,
         op.quarantinePath ?? null,
         op.status,
-        null,
+        op.errorMessage ?? null,
       );
     return this.findOperation(Number(result.lastInsertRowid))!;
   }

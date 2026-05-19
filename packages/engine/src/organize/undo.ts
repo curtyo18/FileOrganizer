@@ -1,10 +1,17 @@
 import * as fs from 'node:fs';
 import { dirname } from 'node:path';
-import type { OperationRecord } from '@fileorganizer/shared';
+import type { OperationKind, OperationRecord } from '@fileorganizer/shared';
 import { BatchesRepo } from '../catalog/batches-repo.js';
 import type { Catalog } from '../catalog/connection.js';
 import { hashFile } from '../scan/hasher.js';
 import { quarantineFile, restoreFromQuarantine } from '../quarantine/quarantine.js';
+
+function inverseUndoKind(op: OperationRecord): OperationKind {
+  if (op.status === 'completed-via-existing') return 'restore';
+  if (op.kind === 'move') return 'move';
+  if (op.kind === 'copy') return 'restore';
+  return op.kind;
+}
 
 export interface UndoOptions {
   db: Catalog;
@@ -56,16 +63,16 @@ export async function undoBatch(opts: UndoOptions): Promise<UndoResult> {
       const reason = (err as Error).message;
       errors.push({ operationId: op.id, reason });
       skipped += 1;
-      const failed = batches.recordOperation(undo.id, {
-        kind: op.kind,
+      batches.recordOperation(undo.id, {
+        kind: inverseUndoKind(op),
         fileId: op.fileId,
         sourceDriveId: op.destDriveId,
         sourcePath: op.destPath,
         destDriveId: op.sourceDriveId,
         destPath: op.sourcePath,
+        errorMessage: reason,
         status: 'failed',
       });
-      batches.updateOperationStatus(failed.id, 'failed', { errorMessage: reason });
     }
   }
 
@@ -137,7 +144,7 @@ async function reverseSameDriveMove(
     .prepare(`UPDATE files SET path = ?, state = 'indexed' WHERE id = ?`)
     .run(op.sourcePath, op.fileId);
   batches.recordOperation(undoBatchId, {
-    kind: 'move',
+    kind: inverseUndoKind(op),
     fileId: op.fileId,
     sourceDriveId: op.destDriveId,
     sourcePath: op.destPath,
@@ -246,7 +253,7 @@ async function reverseCrossDriveMove(
     .prepare(`UPDATE files SET path = ?, drive_id = ?, state = 'indexed' WHERE id = ?`)
     .run(op.sourcePath, op.sourceDriveId, op.fileId);
   batches.recordOperation(undoBatchId, {
-    kind: 'restore',
+    kind: inverseUndoKind(op),
     fileId: op.fileId,
     sourceDriveId: op.destDriveId,
     sourcePath: op.destPath,
@@ -282,7 +289,7 @@ async function reverseCompletedViaExisting(
     .prepare(`UPDATE files SET state = 'indexed' WHERE id = ?`)
     .run(op.fileId);
   batches.recordOperation(undoBatchId, {
-    kind: 'restore',
+    kind: inverseUndoKind(op),
     fileId: op.fileId,
     sourceDriveId: op.sourceDriveId,
     sourcePath: op.destPath,
