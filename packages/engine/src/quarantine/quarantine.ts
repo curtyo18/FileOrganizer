@@ -2,6 +2,7 @@ import { renameSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import type { Catalog } from '../catalog/connection.js';
 import { QuarantineError } from '@fileorganizer/shared';
+import { isPathUnderRoot } from '../drives/paths.js';
 
 export interface QuarantineFileInput {
   db: Catalog;
@@ -22,13 +23,13 @@ export interface QuarantineResult {
 export const QUARANTINE_DIR_NAME = '_FileOrganizer_quarantine';
 
 export function quarantineFile(input: QuarantineFileInput): QuarantineResult {
-  const rel = relative(input.driveRoot, input.sourcePath);
-  if (rel.startsWith('..') || rel === '') {
+  if (!isPathUnderRoot(input.driveRoot, input.sourcePath)) {
     throw new QuarantineError(
       'QUARANTINE_BAD_PATH',
       `source path ${input.sourcePath} is not under drive root ${input.driveRoot}`,
     );
   }
+  const rel = relative(input.driveRoot, input.sourcePath);
   const dest = join(input.driveRoot, QUARANTINE_DIR_NAME, input.batchId, rel);
   mkdirSync(dirname(dest), { recursive: true });
   if (existsSync(dest)) {

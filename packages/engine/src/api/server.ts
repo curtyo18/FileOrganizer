@@ -28,6 +28,7 @@ import { planOrganize, type PlannedOperation } from '../organize/planner.js';
 import { applyApprovedBatch, autoApply } from '../organize/applier.js';
 import { undoBatch } from '../organize/undo.js';
 import { findEmptyDirs, removeEmptyDirs } from '../cleanup/empty-dirs.js';
+import { isPathUnderRoot } from '../drives/paths.js';
 import {
   defaultThrottleProfiles,
   CatalogError,
@@ -883,9 +884,9 @@ function isPathUnderAny(path: string, roots: readonly string[]): boolean {
   for (const r of roots) {
     const trimmed = r.replace(/[/\\]+$/, '');
     if (!trimmed) continue;
+    // path equal to the root itself is also allowed (not just strictly under it)
     if (path === trimmed) return true;
-    if (path.startsWith(trimmed + '/')) return true;
-    if (path.startsWith(trimmed + '\\')) return true;
+    if (isPathUnderRoot(trimmed, path)) return true;
   }
   return false;
 }
