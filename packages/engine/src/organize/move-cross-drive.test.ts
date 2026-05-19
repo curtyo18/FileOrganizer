@@ -10,6 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { Writable } from 'node:stream';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -307,5 +308,210 @@ describe('moveCrossDrive', () => {
     // The caller must see IntegrityError, not the EPERM from unlink.
     expect(caught).toBeInstanceOf(IntegrityError);
     expect((caught as IntegrityError).code).toBe('CROSS_DRIVE_HASH_MISMATCH');
+  });
+
+  it('calls handle.sync() on dest before quarantineFile runs', async () => {
+    const sourceRoot = resolve(dir, 'SRC');
+    const destRoot = resolve(dir, 'DST');
+    const sourcePath = resolve(sourceRoot, 'd.jpg');
+    const destPath = resolve(destRoot, 'Photos', 'd.jpg');
+    const fileId = seedFile(sourcePath, 'sync test content', sourceDriveId);
+
+    const callOrder: string[] = [];
+
+    // Wrap fsp.open to intercept the dest handle and spy on sync/close order.
+    const realOpen = fsp.open.bind(fsp);
+    const openSpy = vi.spyOn(fsp, 'open').mockImplementation(async (...args: Parameters<typeof fsp.open>) => {
+      const handle = await realOpen(...args);
+      // Only wrap handles opened for writing (the dest copy path).
+      const flags = args[1];
+      if (flags === 'w') {
+        const realSync = handle.sync.bind(handle);
+        const realClose = handle.close.bind(handle);
+        vi.spyOn(handle, 'sync').mockImplementation(async () => {
+          callOrder.push('handle.sync');
+          return realSync();
+        });
+        vi.spyOn(handle, 'close').mockImplementation(async () => {
+          callOrder.push('handle.close');
+          return realClose();
+        });
+      }
+      return handle;
+    });
+
+    await moveCrossDrive({
+      db,
+      fileId,
+      destPath,
+      destDriveId,
+      sourceDriveRoot: sourceRoot,
+      batchId,
+      chunkBytes: 64 * 1024,
+    });
+
+    openSpy.mockRestore();
+
+    // handle.sync must come before handle.close, both before the copy is
+    // considered complete (quarantine of source confirms success path ran).
+    const syncIdx = callOrder.indexOf('handle.sync');
+    const closeIdx = callOrder.indexOf('handle.close');
+    expect(syncIdx).toBeGreaterThanOrEqual(0);
+    expect(closeIdx).toBeGreaterThan(syncIdx);
+
+    // The source was quarantined, proving we reached the success path after sync.
+    const q = db
+      .prepare(`SELECT quarantine_path FROM quarantine WHERE batch_id = ?`)
+      .get(batchId) as { quarantine_path: string } | undefined;
+    expect(q).toBeDefined();
+    expect(existsSync(q!.quarantine_path)).toBe(true);
+  });
+
+  it('mid-stream EIO unlinks the partial destination', async () => {
+    const sourceRoot = resolve(dir, 'SRC');
+    const destRoot = resolve(dir, 'DST');
+    const sourcePath = resolve(sourceRoot, 'e.jpg');
+    const destPath = resolve(destRoot, 'Photos', 'e.jpg');
+    const fileId = seedFile(sourcePath, 'eio test content', sourceDriveId);
+
+    // Wrap fsp.open so the dest write-handle's createWriteStream returns a Writable
+    // that fails immediately on the first write() call — no timing ambiguity.
+    const realOpen = fsp.open.bind(fsp);
+    const openSpy = vi.spyOn(fsp, 'open').mockImplementation(async (...args: Parameters<typeof fsp.open>) => {
+      const handle = await realOpen(...args);
+      if (args[1] === 'w') {
+        vi.spyOn(handle, 'createWriteStream').mockImplementation(() => {
+          return new Writable({
+            write(_chunk, _enc, cb) {
+              cb(Object.assign(new Error('EIO'), { code: 'EIO' }));
+            },
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          }) as any;
+        });
+      }
+      return handle;
+    });
+
+    let caught: unknown;
+    try {
+      await moveCrossDrive({
+        db,
+        fileId,
+        destPath,
+        destDriveId,
+        sourceDriveRoot: sourceRoot,
+        batchId,
+        chunkBytes: 64 * 1024,
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    openSpy.mockRestore();
+
+    // Should have thrown (EIO is not in DISCONNECT_CODES, so raw error propagates).
+    expect(caught).toBeDefined();
+    expect((caught as NodeJS.ErrnoException).code).toBe('EIO');
+
+    // The partial destination must have been removed.
+    expect(existsSync(destPath)).toBe(false);
+  });
+
+  it('ENOSPC on write unlinks the partial destination', async () => {
+    const sourceRoot = resolve(dir, 'SRC');
+    const destRoot = resolve(dir, 'DST');
+    const sourcePath = resolve(sourceRoot, 'f.jpg');
+    const destPath = resolve(destRoot, 'Photos', 'f.jpg');
+    const fileId = seedFile(sourcePath, 'enospc test content', sourceDriveId);
+
+    const realOpen = fsp.open.bind(fsp);
+    const openSpy = vi.spyOn(fsp, 'open').mockImplementation(async (...args: Parameters<typeof fsp.open>) => {
+      const handle = await realOpen(...args);
+      if (args[1] === 'w') {
+        vi.spyOn(handle, 'createWriteStream').mockImplementation(() => {
+          return new Writable({
+            write(_chunk, _enc, cb) {
+              cb(Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' }));
+            },
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          }) as any;
+        });
+      }
+      return handle;
+    });
+
+    let caught: unknown;
+    try {
+      await moveCrossDrive({
+        db,
+        fileId,
+        destPath,
+        destDriveId,
+        sourceDriveRoot: sourceRoot,
+        batchId,
+        chunkBytes: 64 * 1024,
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    openSpy.mockRestore();
+
+    expect(caught).toBeDefined();
+    expect((caught as NodeJS.ErrnoException).code).toBe('ENOSPC');
+    expect(existsSync(destPath)).toBe(false);
+  });
+
+  it('DRIVE_DISCONNECTED attempts unlink and swallows secondary unlink failure', async () => {
+    const sourceRoot = resolve(dir, 'SRC');
+    const destRoot = resolve(dir, 'DST');
+    const sourcePath = resolve(sourceRoot, 'g.jpg');
+    const destPath = resolve(destRoot, 'Photos', 'g.jpg');
+    const fileId = seedFile(sourcePath, 'disconnect content', sourceDriveId);
+
+    // Make the pipeline throw ECONNRESET (a DISCONNECT_CODE).
+    const realOpen = fsp.open.bind(fsp);
+    const openSpy = vi.spyOn(fsp, 'open').mockImplementation(async (...args: Parameters<typeof fsp.open>) => {
+      const handle = await realOpen(...args);
+      if (args[1] === 'w') {
+        vi.spyOn(handle, 'createWriteStream').mockImplementation(() => {
+          return new Writable({
+            write(_chunk, _enc, cb) {
+              cb(Object.assign(new Error('ECONNRESET'), { code: 'ECONNRESET' }));
+            },
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          }) as any;
+        });
+      }
+      return handle;
+    });
+
+    // Also make unlink throw ENOENT (secondary failure — drive is gone).
+    const unlinkSpy = vi
+      .spyOn(fsp, 'unlink')
+      .mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+
+    let caught: unknown;
+    try {
+      await moveCrossDrive({
+        db,
+        fileId,
+        destPath,
+        destDriveId,
+        sourceDriveRoot: sourceRoot,
+        batchId,
+        chunkBytes: 64 * 1024,
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    openSpy.mockRestore();
+    unlinkSpy.mockRestore();
+
+    // Must surface DriveError, not the secondary ENOENT from unlink.
+    expect(caught).toBeInstanceOf(DriveError);
+    expect((caught as DriveError).code).toBe('DRIVE_DISCONNECTED');
+    expect((caught as DriveError).message).toContain('ECONNRESET');
   });
 });

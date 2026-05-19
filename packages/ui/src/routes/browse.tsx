@@ -30,21 +30,21 @@ export function Browse(_props: RoutableProps) {
   const limit = 100;
 
   useEffect(() => {
-    api.listDrives().then((d) => {
+    void api.listDrives().then((d) => {
       setDrives(d);
       if (d.length > 0) setDriveId(d[0]!.id);
     });
-    api.getSettings().then((s) => setUserExcluded(s.userExcluded));
+    void api.getSettings().then((s) => setUserExcluded(s.userExcluded));
   }, []);
 
   useEffect(() => {
     if (!driveId) return;
-    api.listFiles(driveId, limit, offset).then((rows) => setFiles(rows as FileRow[]));
+    void api.listFiles(driveId, limit, offset).then((rows) => setFiles(rows as FileRow[]));
   }, [driveId, offset]);
 
   const refreshFiles = () => {
     if (!driveId) return;
-    api.listFiles(driveId, limit, offset).then((rows) => setFiles(rows as FileRow[]));
+    void api.listFiles(driveId, limit, offset).then((rows) => setFiles(rows as FileRow[]));
   };
 
   const handleExcludeClick = async (segment: string) => {

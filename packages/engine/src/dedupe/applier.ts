@@ -10,6 +10,8 @@ export interface ApplyDedupeInput {
   db: Catalog;
   operations: DedupeOperation[];
   driveRoots: Map<string, string>;
+  chunkBytes: number;
+  sleepMs: number;
 }
 
 export interface ApplyDedupeResult {
@@ -59,7 +61,7 @@ export async function applyDedupe(input: ApplyDedupeInput): Promise<ApplyDedupeR
         if (!existsSync(fileRow.path)) {
           throw new IntegrityError('FILE_MISSING', `${fileRow.path} no longer exists`);
         }
-        const liveHash = await hashFile(fileRow.path, { chunkBytes: 1024 * 1024, sleepMs: 0 });
+        const liveHash = await hashFile(fileRow.path, { chunkBytes: input.chunkBytes, sleepMs: input.sleepMs });
         if (liveHash !== fileRow.sha256) {
           throw new IntegrityError(
             'HASH_MISMATCH',
@@ -81,6 +83,7 @@ export async function applyDedupe(input: ApplyDedupeInput): Promise<ApplyDedupeR
           .run(op.removeFileId);
         batches.updateOperationStatus(dbOp.id, 'completed', {
           quarantinePath: result.quarantinePath,
+          postHash: liveHash,
         });
         completed += 1;
         reclaimedBytes += fileRow.sizeBytes;

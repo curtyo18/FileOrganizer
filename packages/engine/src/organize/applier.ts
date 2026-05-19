@@ -9,8 +9,7 @@ import { hashFile } from '../scan/hasher.js';
 import { moveCrossDrive } from './move-cross-drive.js';
 import { moveSameDrive, type MoveOutcome } from './move-same-drive.js';
 import type { PlannedOperation } from './planner.js';
-
-const QUARANTINE_DIR_NAME = '_FileOrganizer_quarantine';
+import { QUARANTINE_DIR_NAME } from '../quarantine/quarantine.js';
 
 const FREE_SPACE_SAFETY_FRACTION = 0.05;
 
@@ -132,7 +131,11 @@ async function runBatch(input: ApplyApprovedBatchInput): Promise<ApplyApprovedBa
           outcome.kind === 'completed-via-existing' ? 'completed-via-existing' : 'completed';
         const destPathUpdate =
           outcome.finalDestPath !== op.destPath ? { destPath: outcome.finalDestPath } : {};
-        batches.updateOperationStatus(ledgerOp.id, finalStatus, destPathUpdate);
+        batches.updateOperationStatus(ledgerOp.id, finalStatus, {
+          ...destPathUpdate,
+          postHash: outcome.postHash,
+          ...(outcome.quarantinePath != null ? { quarantinePath: outcome.quarantinePath } : {}),
+        });
         successfulSourceDirs.add(`${op.sourceDriveId}\t${dirname(op.sourcePath)}`);
       }
       completed += 1;

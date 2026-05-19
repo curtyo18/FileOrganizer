@@ -24,6 +24,31 @@ import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import { inflateRawSync } from 'node:zlib';
+import { createHash } from 'node:crypto';
+
+/**
+ * SHA-256 of MediaInfo_CLI_24.06_Windows_x64.zip
+ * Captured 2026-05-19 from https://mediaarea.net/download/binary/mediainfo/24.06/MediaInfo_CLI_24.06_Windows_x64.zip
+ * If intentionally bumping the version, update both `url` in BINARIES and this constant.
+ */
+const MEDIAINFO_ZIP_SHA256 = 'daf7dba50ed3acb8f97e6156e7c63d0f3e9afeb7a118a8d27e97edc1067859a4';
+
+/**
+ * Verify that `bytes` hashes to `expected` (hex SHA-256).
+ * Throws a descriptive error on mismatch so the caller can surface it cleanly.
+ * Exported for unit-testing.
+ */
+export function verifyHash(bytes: Buffer, expected: string): void {
+  const actual = createHash('sha256').update(bytes).digest('hex');
+  if (actual !== expected) {
+    throw new Error(
+      `SHA-256 mismatch:\n` +
+        `  expected: ${expected}\n` +
+        `  actual:   ${actual}\n` +
+        `If this is the result of an intentional version bump, update MEDIAINFO_ZIP_SHA256.`,
+    );
+  }
+}
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const BIN_DIR = join(ROOT, 'packages', 'engine', 'bin');
@@ -53,12 +78,22 @@ async function ensureBinary(b: Binary): Promise<void> {
   mkdirSync(BIN_DIR, { recursive: true });
 
   const tmpZip = join(BIN_DIR, `${b.name}.zip`);
+  const partialZip = `${tmpZip}.partial`;
   console.log(`[fetch-binaries] downloading ${b.name} from ${b.url}`);
   const res = await fetch(b.url);
   if (!res.ok || !res.body) {
     throw new Error(`HTTP ${res.status} fetching ${b.url}`);
   }
-  await pipeline(Readable.fromWeb(res.body as never), createWriteStream(tmpZip));
+  await pipeline(Readable.fromWeb(res.body as never), createWriteStream(partialZip));
+
+  const zipBytes = readFileSync(partialZip);
+  try {
+    verifyHash(zipBytes, MEDIAINFO_ZIP_SHA256);
+  } catch (err) {
+    try { unlinkSync(partialZip); } catch { /* swallow */ }
+    throw err;
+  }
+  renameSync(partialZip, tmpZip);
 
   try {
     console.log(`[fetch-binaries] extracting ${b.archiveEntry} → ${outPath}`);

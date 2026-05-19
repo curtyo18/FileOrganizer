@@ -100,6 +100,34 @@ describe('RulesRepo', () => {
     expect(repo.findById(created.id)!.name).toBe('renamed');
   });
 
+  it('populates created_at on insert (does not rely on the migration default)', () => {
+    // Regression for the Windows-only failure where migration 0007's
+    // DEFAULT CURRENT_TIMESTAMP was rejected by stricter SQLite builds.
+    // The current contract is: RulesRepo.create() always supplies a real
+    // timestamp explicitly, so the row's created_at is never the empty
+    // placeholder left by the migration's constant default.
+    const repo = new RulesRepo(db);
+    const before = Date.now();
+    const rule = repo.create({
+      name: 'has timestamp',
+      priority: 100,
+      match: {},
+      destinationRole: 'misc',
+      destinationTemplate: '{filename}',
+      movePolicy: 'always-review',
+      quarantinePolicy: 'default',
+    });
+    const after = Date.now();
+
+    const row = db
+      .prepare(`SELECT created_at FROM rules WHERE id = ?`)
+      .get(rule.id) as { created_at: string };
+    expect(row.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+    const insertedAt = Date.parse(row.created_at);
+    expect(insertedAt).toBeGreaterThanOrEqual(before);
+    expect(insertedAt).toBeLessThanOrEqual(after);
+  });
+
   it('deletes a rule', () => {
     const repo = new RulesRepo(db);
     const r = repo.create({
@@ -115,5 +143,48 @@ describe('RulesRepo', () => {
     repo.delete(r.id);
     expect(repo.findById(r.id)).toBeNull();
     expect(repo.list()).toHaveLength(0);
+  });
+
+  it('equal-priority rules ordered by created_at ASC then name ASC', () => {
+    const repo = new RulesRepo(db);
+    // Insert with explicit delays to ensure distinct created_at values aren't needed —
+    // we rely on the name tiebreaker since SQLite CURRENT_TIMESTAMP is second-precision.
+    // Insert three rules at the same priority; the DB assigns created_at via DEFAULT.
+    // To make created_at ordering deterministic without sleeping, we insert them and
+    // rely on name tiebreaker (rowid order can differ from alphabetical).
+    repo.create({
+      name: 'charlie',
+      priority: 100,
+      match: {},
+      destinationRole: 'misc',
+      destinationTemplate: '{filename}',
+      movePolicy: 'always-review',
+      quarantinePolicy: 'default',
+    });
+    repo.create({
+      name: 'alpha',
+      priority: 100,
+      match: {},
+      destinationRole: 'misc',
+      destinationTemplate: '{filename}',
+      movePolicy: 'always-review',
+      quarantinePolicy: 'default',
+    });
+    repo.create({
+      name: 'bravo',
+      priority: 100,
+      match: {},
+      destinationRole: 'misc',
+      destinationTemplate: '{filename}',
+      movePolicy: 'always-review',
+      quarantinePolicy: 'default',
+    });
+
+    const list = repo.list();
+    expect(list).toHaveLength(3);
+    // All same priority and same created_at second → name tiebreaker applies
+    expect(list[0]!.name).toBe('alpha');
+    expect(list[1]!.name).toBe('bravo');
+    expect(list[2]!.name).toBe('charlie');
   });
 });

@@ -42,16 +42,16 @@ function dateOf(file: FileRecord, fieldName: string): Date {
   return d;
 }
 
-function yearOf(f: FileRecord): number {
-  return dateOf(f, 'year').getUTCFullYear();
+function yearOf(file: FileRecord): number {
+  return dateOf(file, 'year').getUTCFullYear();
 }
 
-function monthOf(f: FileRecord): number {
-  return dateOf(f, 'month').getUTCMonth() + 1;
+function monthOf(file: FileRecord): number {
+  return dateOf(file, 'month').getUTCMonth() + 1;
 }
 
-function dayOf(f: FileRecord): number {
-  return dateOf(f, 'day').getUTCDate();
+function dayOf(file: FileRecord): number {
+  return dateOf(file, 'day').getUTCDate();
 }
 
 function padDigits(n: number, width: number): string {

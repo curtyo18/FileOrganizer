@@ -20,6 +20,7 @@ export interface Settings {
   recentArchiveCutoffYears: number;
   uiPort: number;
   userExcluded: string[];
+  lastOptimizedAt?: string;
 }
 
 export const DEFAULT_CATEGORY_MAP: CategoryMap = {

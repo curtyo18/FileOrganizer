@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openCatalog, closeCatalog, type Catalog } from '../catalog/connection.js';
 import { migrate } from '../catalog/migrate.js';
+import { DEFAULT_FILL_THRESHOLD_PERCENT } from '@fileorganizer/shared';
 import { RolesRepo } from './repo.js';
 import { DEFAULT_ROLE_NAMES, seedDefaultRoles } from './defaults.js';
 
@@ -43,7 +44,7 @@ describe('seedDefaultRoles', () => {
     seedDefaultRoles(db);
     for (const r of new RolesRepo(db).list()) {
       expect(r.drivePriority).toEqual([]);
-      expect(r.fillThresholdPercent).toBe(90);
+      expect(r.fillThresholdPercent).toBe(DEFAULT_FILL_THRESHOLD_PERCENT);
     }
   });
 });

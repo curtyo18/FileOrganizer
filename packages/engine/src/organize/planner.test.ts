@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { RoleDefinition } from '@fileorganizer/shared';
+import { DEFAULT_FILL_THRESHOLD_PERCENT } from '@fileorganizer/shared';
 import { openCatalog, closeCatalog, type Catalog } from '../catalog/connection.js';
 import { migrate } from '../catalog/migrate.js';
 import { DriveRepo } from '../drives/repo.js';
@@ -76,7 +77,7 @@ function seedDrive(label: string, freeBytes = 800_000_000_000): string {
   return id;
 }
 
-function role(name: string, drivePriority: string[], fillThresholdPercent = 90): RoleDefinition {
+function role(name: string, drivePriority: string[], fillThresholdPercent = DEFAULT_FILL_THRESHOLD_PERCENT): RoleDefinition {
   return { name, drivePriority, fillThresholdPercent };
 }
 
@@ -310,7 +311,7 @@ describe('planOrganize', () => {
     new RolesRepo(db).create({
       name: 'archive',
       drivePriority: [archiveDriveId],
-      fillThresholdPercent: 90,
+      fillThresholdPercent: DEFAULT_FILL_THRESHOLD_PERCENT,
     });
 
     const plan = planOrganize({
@@ -343,7 +344,7 @@ describe('planOrganize', () => {
     new RolesRepo(db).create({
       name: 'photos',
       drivePriority: [sourceDriveId],
-      fillThresholdPercent: 90,
+      fillThresholdPercent: DEFAULT_FILL_THRESHOLD_PERCENT,
     });
 
     const plan = planOrganize({

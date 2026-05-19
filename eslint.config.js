@@ -1,26 +1,37 @@
-import tsParser from '@typescript-eslint/parser';
-import tsPlugin from '@typescript-eslint/eslint-plugin';
+import tseslint from 'typescript-eslint';
 
-export default [
+export default tseslint.config(
   {
     ignores: ['**/dist/**', '**/node_modules/**'],
   },
+  // Base recommended (non-type-checked) rules
+  ...tseslint.configs.recommended,
   {
     files: ['**/*.ts', '**/*.tsx'],
     languageOptions: {
-      parser: tsParser,
       parserOptions: {
-        sourceType: 'module',
-        ecmaVersion: 2022,
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
       },
-    },
-    plugins: {
-      '@typescript-eslint': tsPlugin,
     },
     rules: {
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       '@typescript-eslint/no-explicit-any': 'warn',
       'no-console': 'off',
+      // Type-checked rules: high-value subset that catches real bugs.
+      // Full recommendedTypeChecked was not enabled because no-unsafe-* produces
+      // excessive noise on legitimate use of untyped external libraries (exifr,
+      // better-sqlite3 raw rows, MediaInfo subprocess output). These two rules
+      // catch the load-bearing correctness issues without the noise.
+      '@typescript-eslint/no-floating-promises': 'error',
+      '@typescript-eslint/no-misused-promises': [
+        'error',
+        {
+          // JSX event-handler attributes (onClick, onChange, etc.) accept async
+          // functions in Preact — false positives otherwise.
+          checksVoidReturn: { attributes: false },
+        },
+      ],
     },
   },
   // Engine HTTP path: ban synchronous directory reads. Recursing
@@ -54,4 +65,4 @@ export default [
       ],
     },
   },
-];
+);

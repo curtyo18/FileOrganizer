@@ -22,6 +22,7 @@ export interface WalkEntry {
   sizeBytes: number;
   mtime: string;
   ctime: string;
+  ino: string;
 }
 
 export async function* walk(opts: WalkOptions): AsyncIterable<WalkEntry> {
@@ -50,12 +51,13 @@ async function* walkOne(
   visited: Set<string>,
 ): AsyncGenerator<WalkEntry, number, void> {
   if (opts.signal?.aborted) return 0;
-  let entries;
+  let entries: import('node:fs').Dirent[];
   try {
     entries = await readdir(dir, { withFileTypes: true });
-  } catch {
+  } catch (err) {
     // Unreadable subtree: treat as non-empty so the parent isn't classified
     // empty just because we couldn't see this child's contents.
+    opts.log?.warn('walker-readdir-error', { path: dir, err: (err as Error).message });
     return 1;
   }
   let yieldedCount = 0;
@@ -75,11 +77,12 @@ async function* walkOne(
     if (isDir || isSym) {
       // For symlinks, verify the target is a directory before descending.
       if (isSym && !isDir) {
-        let targetStat;
+        let targetStat: Awaited<ReturnType<typeof stat>>;
         try {
           targetStat = await stat(childPath); // stat follows symlinks
-        } catch {
+        } catch (err) {
           // Broken symlink or permission error — skip safely.
+          opts.log?.warn('walker-stat-error', { path: childPath, kind: 'symlink', err: (err as Error).message });
           continue;
         }
         if (!targetStat.isDirectory()) {
@@ -93,6 +96,7 @@ async function* walkOne(
               sizeBytes: targetStat.size,
               mtime: targetStat.mtime.toISOString(),
               ctime: targetStat.ctime.toISOString(),
+              ino: targetStat.ino.toString(),
             };
             yieldedCount += 1;
           }
@@ -133,19 +137,21 @@ async function* walkOne(
     } else if (entry.isFile()) {
       const ext = extname(childName).slice(1).toLowerCase();
       if (!opts.extensions.has(ext)) continue;
-      let s;
+      let fileStat: Awaited<ReturnType<typeof stat>>;
       try {
-        s = await stat(childPath);
-      } catch {
+        fileStat = await stat(childPath);
+      } catch (err) {
+        opts.log?.warn('walker-stat-error', { path: childPath, kind: 'file', err: (err as Error).message });
         continue;
       }
       yield {
         path: childPath,
         name: basename(childPath),
         extension: ext,
-        sizeBytes: s.size,
-        mtime: s.mtime.toISOString(),
-        ctime: s.ctime.toISOString(),
+        sizeBytes: fileStat.size,
+        mtime: fileStat.mtime.toISOString(),
+        ctime: fileStat.ctime.toISOString(),
+        ino: fileStat.ino.toString(),
       };
       yieldedCount += 1;
     }

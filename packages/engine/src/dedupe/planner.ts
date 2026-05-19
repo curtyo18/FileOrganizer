@@ -4,6 +4,7 @@ import type { Catalog } from '../catalog/connection.js';
 import { RulesRepo } from '../rules/repo.js';
 import { firstMatch } from '../rules/matcher.js';
 import type { FileRecord } from '@fileorganizer/shared';
+import { toFileRecord } from '../catalog/files-repo.js';
 
 export interface DedupeOperation {
   groupSha256: string;
@@ -53,27 +54,7 @@ export function planDedupe(db: Catalog, opts: PlanDedupeOptions): DedupePlan {
       .prepare(`SELECT * FROM files WHERE id = ?`)
       .get(fileId) as Record<string, unknown> | undefined;
     if (!row) return null;
-    const rec: FileRecord = {
-      id: row['id'] as number,
-      driveId: row['drive_id'] as string,
-      path: row['path'] as string,
-      name: row['name'] as string,
-      extension: row['extension'] as string,
-      sizeBytes: row['size_bytes'] as number,
-      category: row['category'] as FileRecord['category'],
-      sha256: row['sha256'] as string,
-      mtime: row['mtime'] as string,
-      ctime: row['ctime'] as string,
-      exifDate: (row['exif_date'] as string | null) ?? null,
-      dateSource: row['date_source'] as FileRecord['dateSource'],
-      width: (row['width'] as number | null) ?? null,
-      height: (row['height'] as number | null) ?? null,
-      durationSeconds: (row['duration_seconds'] as number | null) ?? null,
-      ntfsFileId: (row['ntfs_file_id'] as string | null) ?? null,
-      state: row['state'] as FileRecord['state'],
-      lastVerifiedAt: row['last_verified_at'] as string,
-      scanId: row['scan_id'] as string,
-    };
+    const rec = toFileRecord(row);
     fileCache.set(fileId, rec);
     return rec;
   };

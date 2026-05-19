@@ -1,4 +1,4 @@
-import { openCatalog, closeCatalog } from '../catalog/connection.js';
+import { openCatalog, closeCatalog, assertCatalogHealthy } from '../catalog/connection.js';
 import { migrate } from '../catalog/migrate.js';
 import { writePointer } from '../catalog/locator.js';
 import { SettingsRepo } from '../catalog/settings-repo.js';
@@ -14,6 +14,7 @@ export function runInit(opts: InitOptions): void {
   const db = openCatalog(opts.catalogPath);
   try {
     migrate(db);
+    assertCatalogHealthy(db, opts.catalogPath);
     const settings = new SettingsRepo(db);
     settings.load();
     seedDefaultRoles(db);

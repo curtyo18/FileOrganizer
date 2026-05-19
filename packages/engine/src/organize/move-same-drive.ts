@@ -14,8 +14,8 @@ export interface MoveSameDriveInput {
 }
 
 export type MoveOutcome =
-  | { kind: 'moved'; finalDestPath: string }
-  | { kind: 'completed-via-existing'; finalDestPath: string };
+  | { kind: 'moved'; finalDestPath: string; postHash: string; quarantinePath: string | null }
+  | { kind: 'completed-via-existing'; finalDestPath: string; postHash: string; quarantinePath: string | null };
 
 export async function moveSameDrive(input: MoveSameDriveInput): Promise<MoveOutcome> {
   const row = input.db
@@ -29,7 +29,7 @@ export async function moveSameDrive(input: MoveSameDriveInput): Promise<MoveOutc
   const decision = await resolveCollision(input.destPath, row.sha256, input.chunkBytes);
 
   if (decision.kind === 'same-content') {
-    quarantineFile({
+    const qResult = quarantineFile({
       db: input.db,
       batchId: input.batchId,
       driveId: row.driveId,
@@ -42,7 +42,7 @@ export async function moveSameDrive(input: MoveSameDriveInput): Promise<MoveOutc
     input.db
       .prepare(`UPDATE files SET state = 'quarantined' WHERE id = ?`)
       .run(input.fileId);
-    return { kind: 'completed-via-existing', finalDestPath: decision.path };
+    return { kind: 'completed-via-existing', finalDestPath: decision.path, postHash: row.sha256, quarantinePath: qResult.quarantinePath };
   }
 
   const finalDestPath = decision.path;
@@ -51,5 +51,8 @@ export async function moveSameDrive(input: MoveSameDriveInput): Promise<MoveOutc
   input.db
     .prepare(`UPDATE files SET path = ?, state = 'moved' WHERE id = ?`)
     .run(finalDestPath, input.fileId);
-  return { kind: 'moved', finalDestPath };
+  // Atomic rename preserves bytes on POSIX/NTFS, so the catalog's sha256
+  // equals the post-rename file content — no re-hash needed (cross-drive
+  // path re-hashes because pipeline copies may corrupt mid-stream).
+  return { kind: 'moved', finalDestPath, postHash: row.sha256, quarantinePath: null };
 }

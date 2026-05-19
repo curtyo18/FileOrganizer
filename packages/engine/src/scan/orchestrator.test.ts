@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openCatalog, closeCatalog, type Catalog } from '../catalog/connection.js';
@@ -9,8 +9,8 @@ import { FilesRepo } from '../catalog/files-repo.js';
 import { ScansRepo } from '../catalog/scans-repo.js';
 import { runScan } from './orchestrator.js';
 import { ThrottleManager } from '../throttle/manager.js';
-import { defaultThrottleProfiles, DEFAULT_CATEGORY_MAP } from '@fileorganizer/shared';
-import { createLogger } from '../log.js';
+import { defaultThrottleProfiles, DEFAULT_CATEGORY_MAP, ScanError } from '@fileorganizer/shared';
+import { silentLogger } from '../test-helpers/log.js';
 
 let dir: string;
 let db: Catalog;
@@ -52,8 +52,7 @@ describe('runScan', () => {
     fixture('a.jpg', 'aaa');
     fixture('b.pdf', 'bbb');
     fixture('skip.exe', 'xxx');
-    const writes: string[] = [];
-    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const log = silentLogger();
     const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
     const result = await runScan({
       db, driveId, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
@@ -70,10 +69,25 @@ describe('runScan', () => {
     expect(files.findByPath(driveId, join(scanRoot, 'b.pdf'))?.category).toBe('document');
   });
 
+  it('scan writes stat.ino as ntfs_file_id for indexed files', async () => {
+    const path = fixture('ntfs-id-test.jpg', 'content');
+    const log = silentLogger();
+    const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
+    await runScan({
+      db, driveId, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
+      throttle, log, mediainfoPath: '/no/such',
+    });
+    const row = db
+      .prepare(`SELECT ntfs_file_id FROM files WHERE path = ?`)
+      .get(path) as { ntfs_file_id: string | null } | undefined;
+    expect(row).toBeDefined();
+    expect(row!.ntfs_file_id).not.toBeNull();
+    expect(row!.ntfs_file_id).toBe(statSync(path).ino.toString());
+  });
+
   it('skips re-hashing unchanged files on second scan', async () => {
     fixture('a.jpg', 'aaa');
-    const writes: string[] = [];
-    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const log = silentLogger();
     const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
     const opts = {
       db, driveId, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
@@ -87,8 +101,7 @@ describe('runScan', () => {
 
   it('marks files missing on rescan when they disappeared', async () => {
     const a = fixture('a.jpg', 'aaa');
-    const writes: string[] = [];
-    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const log = silentLogger();
     const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
     const opts = {
       db, driveId, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
@@ -105,8 +118,7 @@ describe('runScan', () => {
     for (let i = 0; i < 1000; i += 1) {
       fixture(`f${String(i).padStart(4, '0')}.jpg`, `payload-${i}`.repeat(50));
     }
-    const writes: string[] = [];
-    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const log = silentLogger();
     const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
     const controller = new AbortController();
     const promise = runScan({
@@ -135,8 +147,7 @@ describe('runScan', () => {
     mkdirSync(join(scanRoot, 'fully-empty', 'deep'), { recursive: true });
     // sibling of keeper that's empty
     mkdirSync(join(scanRoot, 'keeper', 'empty-sibling'), { recursive: true });
-    const writes: string[] = [];
-    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const log = silentLogger();
     const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
     await runScan({
       db, driveId, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
@@ -161,8 +172,7 @@ describe('runScan', () => {
     mkdirSync(join(scanRoot, 'gone'), { recursive: true });
     mkdirSync(join(scanRoot, 'becomes-occupied'), { recursive: true });
     mkdirSync(join(scanRoot, 'still-empty'), { recursive: true });
-    const writes: string[] = [];
-    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const log = silentLogger();
     const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
     const baseOpts = {
       db, driveId, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
@@ -194,8 +204,7 @@ describe('runScan', () => {
 
   it('does not prune empty-dir rows when the scan is cancelled', async () => {
     mkdirSync(join(scanRoot, 'pre-existing'), { recursive: true });
-    const writes: string[] = [];
-    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const log = silentLogger();
     const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
     await runScan({
       db, driveId, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
@@ -228,8 +237,7 @@ describe('runScan', () => {
 
   it('persists a scans row with completed status', async () => {
     fixture('a.jpg', 'aaa');
-    const writes: string[] = [];
-    const log = createLogger({ level: 'error', write: (l) => writes.push(l) });
+    const log = silentLogger();
     const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
     const result = await runScan({
       db, driveId, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
@@ -238,5 +246,88 @@ describe('runScan', () => {
     const scan = new ScansRepo(db).findById(result.scanId);
     expect(scan!.status).toBe('completed');
     expect(scan!.progress.filesIndexed).toBe(1);
+  });
+});
+
+describe('runScan — volume serial pre-flight', () => {
+  // The pre-flight check only fires for real (non-synth) volume serials.
+  // On POSIX, detectVolume returns synth-<sha1> serials; registering a drive
+  // with a non-synth serial simulates a Windows drive whose volume serial
+  // was recorded at registration and now differs from the live OS report.
+  const FAKE_WINDOWS_SERIAL = '{12345678-ABCD-EF01-2345-6789ABCDEF01}';
+
+  it('refuses to start with VOLUME_SERIAL_MISMATCH when stored serial differs from live', async () => {
+    // Drive registered with a non-synth serial pointing at a real path.
+    // The live detectVolume will return a synth-* serial (POSIX) or a
+    // different real serial (Windows remapping) — either way a mismatch.
+    const drive = new DriveRepo(db).upsert({
+      volumeSerial: FAKE_WINDOWS_SERIAL,
+      label: 'stale-drive',
+      currentLetter: null,
+      mountPath: scanRoot,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1_000_000_000,
+      freeBytes: 500_000_000,
+    });
+    const log = silentLogger();
+    const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
+
+    let caught: unknown;
+    try {
+      await runScan({
+        db, driveId: drive.id, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
+        throttle, log, mediainfoPath: '/no/such',
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(ScanError);
+    expect((caught as ScanError).code).toBe('VOLUME_SERIAL_MISMATCH');
+    // Error message must name both the catalog value and the live value so the
+    // operator can debug the remapping.
+    expect((caught as ScanError).message).toContain(FAKE_WINDOWS_SERIAL);
+    expect((caught as ScanError).message).toContain('live=');
+  });
+
+  it('starts normally when the stored serial is a synth serial (POSIX: check skipped)', async () => {
+    // Synth serials are path-specific and can't detect drive remapping on POSIX,
+    // so the pre-flight is skipped for them.  This verifies that skip is correct
+    // and the scan proceeds without a false VOLUME_SERIAL_MISMATCH.
+    fixture('a.jpg', 'aaa');
+    const log = silentLogger();
+    const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
+
+    // driveId from beforeEach has volumeSerial='X' (non-synth, no mountPath=null).
+    // Use it directly — mountPath is null so the check is also skipped.
+    const result = await runScan({
+      db, driveId, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
+      throttle, log, mediainfoPath: '/no/such',
+    });
+    expect(result.filesIndexed).toBe(1);
+  });
+
+  it('leaves no running scans row after a mismatch throw', async () => {
+    const drive = new DriveRepo(db).upsert({
+      volumeSerial: FAKE_WINDOWS_SERIAL,
+      label: 'stale-drive2',
+      currentLetter: null,
+      mountPath: scanRoot,
+      kind: 'local',
+      roles: [],
+      totalBytes: 1_000_000_000,
+      freeBytes: 500_000_000,
+    });
+    const log = silentLogger();
+    const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
+
+    await runScan({
+      db, driveId: drive.id, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
+      throttle, log, mediainfoPath: '/no/such',
+    }).catch(() => { /* expected mismatch */ });
+
+    // No running scan should exist after the throw.
+    expect(new ScansRepo(db).hasRunning(drive.id)).toBe(false);
   });
 });

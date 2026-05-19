@@ -74,7 +74,7 @@ export function Organize(_props: RoutableProps) {
     const involved = drives.map((d) => d.id);
     const missing = missingMountDrives(involved);
     if (missing.length === 0) {
-      runPlan(driveRootsFromCatalog);
+      void runPlan(driveRootsFromCatalog);
     } else {
       setShowRoots('plan');
     }
@@ -106,7 +106,7 @@ export function Organize(_props: RoutableProps) {
 
   const goToPage = (offset: number) => {
     if (busy) return;
-    runPlan(planRoots, offset);
+    void runPlan(planRoots, offset);
   };
 
   const onApplyClicked = (kind: 'apply' | 'dryrun') => {
@@ -116,7 +116,7 @@ export function Organize(_props: RoutableProps) {
       .flatMap((o) => [o.sourceDriveId, o.destDriveId]))];
     const missing = missingMountDrives(involved);
     if (missing.length === 0) {
-      runApply(kind, planRoots);
+      void runApply(kind, planRoots);
     } else {
       setShowRoots(kind);
     }
@@ -319,8 +319,8 @@ export function Organize(_props: RoutableProps) {
           onCancel={() => setShowRoots(null)}
           onResolve={(roots) => {
             setShowRoots(null);
-            if (showRoots === 'plan') runPlan(roots);
-            else runApply(showRoots, roots);
+            if (showRoots === 'plan') void runPlan(roots);
+            else void runApply(showRoots, roots);
           }}
         />
       ) : null}

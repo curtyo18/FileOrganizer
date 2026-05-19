@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
+import type { Logger } from '../log.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -14,6 +15,7 @@ export interface VideoMetadata {
 export interface ExtractVideoOptions {
   binaryPath: string;
   timeoutMs?: number;
+  log?: Logger;
 }
 
 export async function extractVideoMetadata(
@@ -29,8 +31,9 @@ export async function extractVideoMetadata(
       ['--Output=JSON', '--Full', path],
       { timeout: opts.timeoutMs ?? 10_000, maxBuffer: 5 * 1024 * 1024 },
     );
-    return parseMediainfoOutput(stdout);
-  } catch {
+    return parseMediainfoOutput(stdout, { ...(opts.log !== undefined && { log: opts.log }), path });
+  } catch (err) {
+    opts.log?.warn('metadata-video-error', { path, phase: 'execFile', err: (err as Error).message });
     return { exifDate: null, width: null, height: null, durationSeconds: null };
   }
 }
@@ -49,11 +52,21 @@ interface MediaInfoOutput {
   media?: { track?: MediaInfoTrack[] };
 }
 
-export function parseMediainfoOutput(json: string): VideoMetadata {
+export interface ParseMediainfoOptions {
+  log?: Logger;
+  path?: string;
+}
+
+export function parseMediainfoOutput(json: string, opts?: ParseMediainfoOptions): VideoMetadata {
   let parsed: MediaInfoOutput;
   try {
     parsed = JSON.parse(json) as MediaInfoOutput;
-  } catch {
+  } catch (err) {
+    opts?.log?.warn('metadata-video-error', {
+      path: opts?.path,
+      phase: 'parse',
+      err: (err as Error).message,
+    });
     return { exifDate: null, width: null, height: null, durationSeconds: null };
   }
   const tracks = parsed.media?.track ?? [];

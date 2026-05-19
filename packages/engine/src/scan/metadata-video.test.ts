@@ -4,6 +4,7 @@ import { extractVideoMetadata, parseMediainfoOutput } from './metadata-video.js'
 import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { makeCapturingLogger } from '../test-helpers/log.js';
 
 describe('parseMediainfoOutput', () => {
   it('returns null exifDate when no recorded date', () => {
@@ -45,7 +46,47 @@ describe('extractVideoMetadata', () => {
     expect(meta).toEqual({ exifDate: null, width: null, height: null, durationSeconds: null });
   });
 
-  it('happy path: returns parsed metadata when a real fake-binary emits canned MediaInfo JSON', async () => {
+  it.skipIf(process.platform === 'win32')('logs warn with metadata-video-error (phase execFile) when execFile throws, and returns null metadata', async () => {
+    // Create a real binary that exists so we pass the existsSync check,
+    // but make it exit with a non-zero status to trigger the execFile catch.
+    const tmpDir = mkdtempSync(join(tmpdir(), 'fileorg-vidmeta-err-'));
+    const fakeBinary = join(tmpDir, 'mediainfo-fail.sh');
+    writeFileSync(fakeBinary, '#!/bin/sh\nexit 1', { mode: 0o755 });
+
+    const { logger, warns } = makeCapturingLogger();
+    try {
+      const meta = await extractVideoMetadata('/video/sample.mp4', {
+        binaryPath: fakeBinary,
+        log: logger,
+      });
+      expect(meta).toEqual({ exifDate: null, width: null, height: null, durationSeconds: null });
+      expect(warns).toHaveLength(1);
+      const w = warns[0]!;
+      expect(w.msg).toBe('metadata-video-error');
+      expect(w.fields['path']).toBe('/video/sample.mp4');
+      expect(w.fields['phase']).toBe('execFile');
+      expect(typeof w.fields['err']).toBe('string');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('logs warn with metadata-video-error (phase parse) when JSON is invalid, and returns null metadata', async () => {
+    const { logger, warns } = makeCapturingLogger();
+    const result = parseMediainfoOutput('not-valid-json', {
+      log: logger,
+      path: '/video/sample.mp4',
+    });
+    expect(result).toEqual({ exifDate: null, width: null, height: null, durationSeconds: null });
+    expect(warns).toHaveLength(1);
+    const w = warns[0]!;
+    expect(w.msg).toBe('metadata-video-error');
+    expect(w.fields['path']).toBe('/video/sample.mp4');
+    expect(w.fields['phase']).toBe('parse');
+    expect(typeof w.fields['err']).toBe('string');
+  });
+
+  it.skipIf(process.platform === 'win32')('happy path: returns parsed metadata when a real fake-binary emits canned MediaInfo JSON', async () => {
     // Create a real shell script that acts as a fake MediaInfo binary.
     // This tests the full execFileAsync → parseMediainfoOutput pipeline
     // without needing to mock the already-promisified execFile closure.

@@ -1,10 +1,17 @@
 import * as fs from 'node:fs';
 import { dirname } from 'node:path';
-import type { OperationRecord } from '@fileorganizer/shared';
+import type { OperationKind, OperationRecord } from '@fileorganizer/shared';
 import { BatchesRepo } from '../catalog/batches-repo.js';
 import type { Catalog } from '../catalog/connection.js';
 import { hashFile } from '../scan/hasher.js';
 import { quarantineFile, restoreFromQuarantine } from '../quarantine/quarantine.js';
+
+function inverseUndoKind(op: OperationRecord): OperationKind {
+  if (op.status === 'completed-via-existing') return 'restore';
+  if (op.kind === 'move') return 'move';
+  if (op.kind === 'copy') return 'restore';
+  return op.kind;
+}
 
 export interface UndoOptions {
   db: Catalog;
@@ -56,16 +63,16 @@ export async function undoBatch(opts: UndoOptions): Promise<UndoResult> {
       const reason = (err as Error).message;
       errors.push({ operationId: op.id, reason });
       skipped += 1;
-      const failed = batches.recordOperation(undo.id, {
-        kind: op.kind,
+      batches.recordOperation(undo.id, {
+        kind: inverseUndoKind(op),
         fileId: op.fileId,
         sourceDriveId: op.destDriveId,
         sourcePath: op.destPath,
         destDriveId: op.sourceDriveId,
         destPath: op.sourcePath,
+        errorMessage: reason,
         status: 'failed',
       });
-      batches.updateOperationStatus(failed.id, 'failed', { errorMessage: reason });
     }
   }
 
@@ -116,10 +123,15 @@ async function reverseSameDriveMove(
       | { sha256: string }
       | undefined
   )?.sha256;
-  if (!fileSha) throw new Error(`file ${op.fileId} not found`);
+  const verifyHash = op.postHash ?? fileSha;
+  if (!verifyHash) throw new Error(`file ${op.fileId} not found`);
   const live = await hashFile(op.destPath, { chunkBytes, sleepMs: 0 });
-  if (live !== fileSha) {
-    throw new Error(`hash drift at ${op.destPath}`);
+  if (live !== verifyHash) {
+    throw new Error(
+      op.postHash
+        ? `post_hash mismatch at ${op.destPath}`
+        : `hash drift at ${op.destPath}`,
+    );
   }
 
   if (fs.existsSync(op.sourcePath)) {
@@ -132,7 +144,7 @@ async function reverseSameDriveMove(
     .prepare(`UPDATE files SET path = ?, state = 'indexed' WHERE id = ?`)
     .run(op.sourcePath, op.fileId);
   batches.recordOperation(undoBatchId, {
-    kind: 'move',
+    kind: inverseUndoKind(op),
     fileId: op.fileId,
     sourceDriveId: op.destDriveId,
     sourcePath: op.destPath,
@@ -162,10 +174,15 @@ async function reverseCrossDriveMove(
       | { sha256: string }
       | undefined
   )?.sha256;
-  if (!fileSha) throw new Error(`file ${op.fileId} not found`);
+  const verifyHash = op.postHash ?? fileSha;
+  if (!verifyHash) throw new Error(`file ${op.fileId} not found`);
   const live = await hashFile(op.destPath, { chunkBytes, sleepMs: 0 });
-  if (live !== fileSha) {
-    throw new Error(`hash drift at ${op.destPath}`);
+  if (live !== verifyHash) {
+    throw new Error(
+      op.postHash
+        ? `post_hash mismatch at ${op.destPath}`
+        : `hash drift at ${op.destPath}`,
+    );
   }
 
   const sourceRoot = opts.driveRoots.get(op.sourceDriveId);
@@ -210,11 +227,18 @@ async function reverseCrossDriveMove(
       } catch (catalogErr) {
         // A secondary DB failure must not mask the original unlink error; log and
         // continue so the outer throw surfaces the real cause to the caller.
-        console.error('undo-catalog-update-failed', {
-          op_id: op.id,
-          file_id: op.fileId,
-          error: (catalogErr as Error).message,
-        });
+        // NOTE: no structured logger is threaded through UndoOptions yet; emitting
+        // in log.ts JSON shape so it parses consistently with the rest of the engine.
+        process.stderr.write(
+          JSON.stringify({
+            ts: new Date().toISOString(),
+            level: 'error',
+            msg: 'undo-catalog-update-failed',
+            op_id: op.id,
+            file_id: op.fileId,
+            error: (catalogErr as Error).message,
+          }) + '\n',
+        );
       }
     } catch (rollbackErr) {
       throw new Error(
@@ -229,7 +253,7 @@ async function reverseCrossDriveMove(
     .prepare(`UPDATE files SET path = ?, drive_id = ?, state = 'indexed' WHERE id = ?`)
     .run(op.sourcePath, op.sourceDriveId, op.fileId);
   batches.recordOperation(undoBatchId, {
-    kind: 'restore',
+    kind: inverseUndoKind(op),
     fileId: op.fileId,
     sourceDriveId: op.destDriveId,
     sourcePath: op.destPath,
@@ -265,7 +289,7 @@ async function reverseCompletedViaExisting(
     .prepare(`UPDATE files SET state = 'indexed' WHERE id = ?`)
     .run(op.fileId);
   batches.recordOperation(undoBatchId, {
-    kind: 'restore',
+    kind: inverseUndoKind(op),
     fileId: op.fileId,
     sourceDriveId: op.sourceDriveId,
     sourcePath: op.destPath,

@@ -1,5 +1,6 @@
+import { createLogger, defaultWriter } from '../log.js';
 import { readPointer, writePointer, defaultCatalogPath } from '../catalog/locator.js';
-import { openCatalog, closeCatalog } from '../catalog/connection.js';
+import { openCatalog, closeCatalog, assertCatalogHealthy } from '../catalog/connection.js';
 import { migrate } from '../catalog/migrate.js';
 import { SettingsRepo } from '../catalog/settings-repo.js';
 import { seedDefaultRules } from '../rules/defaults.js';
@@ -9,6 +10,8 @@ import { ThrottleScheduler } from '../throttle/scheduler.js';
 import { createServer } from '../api/server.js';
 import { reconcileOnStartup } from '../catalog/reconcile.js';
 import { Optimizer } from '../catalog/optimizer.js';
+
+const SCHEDULER_INTERVAL_MS = 60_000;
 
 export interface ServeCliOptions {
   pointerPath: string;
@@ -23,6 +26,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
     const initDb = openCatalog(catalogPath);
     try {
       migrate(initDb);
+      assertCatalogHealthy(initDb, catalogPath);
       new SettingsRepo(initDb).load();
       seedDefaultRoles(initDb);
       seedDefaultRules(initDb);
@@ -34,6 +38,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
   }
   const db = openCatalog(ptr.catalogPath);
   migrate(db);
+  assertCatalogHealthy(db, ptr.catalogPath);
   seedDefaultRoles(db);
   seedDefaultRules(db);
 
@@ -78,7 +83,7 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
       scheduler = new ThrottleScheduler({
         manager: throttleRef,
         events: server.events,
-        intervalMs: 60_000,
+        intervalMs: SCHEDULER_INTERVAL_MS,
       });
       scheduler.start();
     },
@@ -100,12 +105,22 @@ export async function runServe(opts: ServeCliOptions): Promise<void> {
   console.log('  Press Ctrl+C to stop.');
   console.log('');
 
+  const log = createLogger({ level: 'info', write: defaultWriter });
+
   await new Promise<void>((resolve) => {
-    const shutdown = async () => {
+    const shutdown = async (): Promise<void> => {
       scheduler?.stop();
       clearInterval(optimizerHandle);
-      await server.close();
-      closeCatalog(db);
+      try {
+        await server.close();
+      } catch (err) {
+        log.error('shutdown-server-close-failed', { err: (err as Error).message });
+      }
+      try {
+        closeCatalog(db);
+      } catch (err) {
+        log.error('shutdown-catalog-close-failed', { err: (err as Error).message });
+      }
       resolve();
     };
     process.on('SIGINT', () => void shutdown());

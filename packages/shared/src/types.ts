@@ -1,3 +1,5 @@
+export const DEFAULT_FILL_THRESHOLD_PERCENT = 90;
+
 export const CATEGORIES = [
   'image',
   'video',

@@ -1,11 +1,20 @@
 #!/usr/bin/env node
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { defaultPointerPath } from '../catalog/locator.js';
 import { runInit } from './init.js';
 import { runStatus, formatStatus } from './status.js';
 import { runScanCli } from './scan.js';
 import { runServe } from './serve.js';
 import type { ThrottleProfileName } from '@fileorganizer/shared';
+
+const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const VERSION: string = (JSON.parse(readFileSync(resolve(packageRoot, 'package.json'), 'utf-8')) as { version: string }).version;
+const mediainfoPathDefault =
+  process.platform === 'win32'
+    ? resolve(packageRoot, 'bin', 'mediainfo.exe')
+    : resolve(packageRoot, 'bin', 'mediainfo');
 
 export interface CliResult {
   exitCode: number;
@@ -24,20 +33,41 @@ function parseArgs(argv: string[]): ParsedArgs {
   for (let i = 0; i < rest.length; i += 1) {
     const a = rest[i]!;
     if (a.startsWith('--')) {
-      const key = a.slice(2);
-      const next = rest[i + 1];
-      if (next && !next.startsWith('--')) {
-        flags[key] = next;
-        i += 1;
+      const eq = a.indexOf('=');
+      if (eq > 0) {
+        const key = a.slice(2, eq);
+        const val = a.slice(eq + 1);
+        flags[key] = val;
       } else {
-        flags[key] = 'true';
+        const key = a.slice(2);
+        const next = rest[i + 1];
+        if (next && !next.startsWith('--')) {
+          flags[key] = next;
+          i += 1;
+        } else {
+          flags[key] = 'true';
+        }
       }
     }
   }
   return { command: command ?? 'help', flags };
 }
 
+const HELP_LINES = [
+  'fileorganizer <command> [--version | -V]',
+  'Commands:',
+  '  init --catalog <path> [--pointer <path>]',
+  '  status [--pointer <path>]',
+  '  scan --path <dir> [--profile idle|balanced|full-send] [--mediainfo <path>] [--pointer <path>]',
+  '  serve [--port <number>] [--pointer <path>]',
+];
+
 export async function runCli(argv: string[]): Promise<CliResult> {
+  // Handle --version / -V before full parse (they are top-level flags, not subcommands)
+  if (argv.includes('--version') || argv.includes('-V')) {
+    return { exitCode: 0, stdout: VERSION, stderr: '' };
+  }
+
   const { command, flags } = parseArgs(argv);
   const stdout: string[] = [];
   const stderr: string[] = [];
@@ -72,11 +102,7 @@ export async function runCli(argv: string[]): Promise<CliResult> {
           return { exitCode: 1, stdout: stdout.join('\n'), stderr: stderr.join('\n') };
         }
         const profile = (flags['profile'] as ThrottleProfileName | undefined) ?? 'balanced';
-        const mediainfoPath =
-          flags['mediainfo'] ??
-          (process.platform === 'win32'
-            ? `${process.cwd()}\\packages\\engine\\bin\\mediainfo.exe`
-            : `${process.cwd()}/packages/engine/bin/mediainfo`);
+        const mediainfoPath = flags['mediainfo'] ?? mediainfoPathDefault;
         const result = await runScanCli({ pointerPath, rootPath: root, profile, mediainfoPath });
         stdout.push(
           `Scan ${result.scanId} complete:`,
@@ -87,18 +113,11 @@ export async function runCli(argv: string[]): Promise<CliResult> {
       case 'help':
       case '--help':
       case '-h': {
-        stdout.push(
-          'fileorganizer <command>',
-          'Commands:',
-          '  init --catalog <path> [--pointer <path>]',
-          '  status [--pointer <path>]',
-          '  scan --path <dir> [--profile idle|balanced|full-send] [--mediainfo <path>] [--pointer <path>]',
-          '  serve [--port <number>] [--pointer <path>]',
-        );
+        stdout.push(...HELP_LINES);
         return { exitCode: 0, stdout: stdout.join('\n'), stderr: stderr.join('\n') };
       }
       default: {
-        stderr.push(`unknown command: ${command}`);
+        stderr.push(`unknown command: ${command}`, ...HELP_LINES);
         return { exitCode: 2, stdout: stdout.join('\n'), stderr: stderr.join('\n') };
       }
     }
@@ -111,7 +130,7 @@ export async function runCli(argv: string[]): Promise<CliResult> {
 const entryArg = process.argv[1];
 const isMain = entryArg ? import.meta.url === pathToFileURL(entryArg).href : false;
 if (isMain) {
-  runCli(process.argv.slice(2)).then((r) => {
+  void runCli(process.argv.slice(2)).then((r) => {
     if (r.stdout) process.stdout.write(r.stdout + '\n');
     if (r.stderr) process.stderr.write(r.stderr + '\n');
     process.exit(r.exitCode);

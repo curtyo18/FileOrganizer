@@ -89,7 +89,7 @@ export class FilesRepo {
     const row = this.db
       .prepare(`SELECT * FROM files WHERE drive_id = ? AND path = ?`)
       .get(driveId, path) as Record<string, unknown> | undefined;
-    return row ? toRecord(row) : null;
+    return row ? toFileRecord(row) : null;
   }
 
   markMissing(driveId: string, currentScanId: string, scanRoots: string[]): number {
@@ -115,7 +115,7 @@ export class FilesRepo {
   }
 }
 
-function toRecord(row: Record<string, unknown>): FileRecord {
+export function toFileRecord(row: Record<string, unknown>): FileRecord {
   return {
     id: row['id'] as number,
     driveId: row['drive_id'] as string,

@@ -1,8 +1,9 @@
 import { readdirSync, rmdirSync, statSync } from 'node:fs';
-import { resolve, sep } from 'node:path';
+import { resolve } from 'node:path';
 import { BatchesRepo } from '../catalog/batches-repo.js';
 import { EmptyDirsRepo } from '../catalog/empty-dirs-repo.js';
 import type { Catalog } from '../catalog/connection.js';
+import { isPathUnderRoot } from '../drives/paths.js';
 
 export interface FindEmptyDirsResult {
   paths: string[];
@@ -72,7 +73,7 @@ export function removeEmptyDirs(
       sourcePath: abs,
       status: 'in-progress',
     });
-    if (!isUnder(root, abs)) {
+    if (!isPathUnderRoot(root, abs)) {
       const reason = 'path escapes drive root';
       batches.updateOperationStatus(op.id, 'failed', { errorMessage: reason });
       failed.push({ path: abs, reason });
@@ -128,8 +129,3 @@ export function removeEmptyDirs(
   return { batchId: batch.id, removed, failed };
 }
 
-function isUnder(root: string, path: string): boolean {
-  if (path === root) return false;
-  const withSep = root.endsWith(sep) ? root : root + sep;
-  return path.startsWith(withSep);
-}

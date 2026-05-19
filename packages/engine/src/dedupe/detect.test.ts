@@ -6,19 +6,30 @@ import { openCatalog, closeCatalog, type Catalog } from '../catalog/connection.j
 import { migrate } from '../catalog/migrate.js';
 import { DriveRepo } from '../drives/repo.js';
 import { FilesRepo, type UpsertFileInput } from '../catalog/files-repo.js';
-import { detectDuplicates } from './detect.js';
+import { detectDuplicates, type DuplicateCopy } from './detect.js';
 
 let dir: string;
 let db: Catalog;
 let driveId: string;
+let driveId2: string;
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'fileorg-dedup-'));
   db = openCatalog(join(dir, 'cat.db'));
   migrate(db);
-  driveId = new DriveRepo(db).upsert({
+  const driveRepo = new DriveRepo(db);
+  driveId = driveRepo.upsert({
     volumeSerial: 'X',
     label: 'X',
+    currentLetter: null,
+    kind: 'local',
+    roles: [],
+    totalBytes: 1,
+    freeBytes: 1,
+  }).id;
+  driveId2 = driveRepo.upsert({
+    volumeSerial: 'Y',
+    label: 'Y',
     currentLetter: null,
     kind: 'local',
     roles: [],
@@ -28,6 +39,9 @@ beforeEach(() => {
   db.prepare(
     `INSERT INTO scans (id, drive_id, started_at, status, throttle_profile) VALUES (?, ?, ?, ?, ?)`,
   ).run('s1', driveId, new Date().toISOString(), 'completed', 'balanced');
+  db.prepare(
+    `INSERT INTO scans (id, drive_id, started_at, status, throttle_profile) VALUES (?, ?, ?, ?, ?)`,
+  ).run('s2', driveId2, new Date().toISOString(), 'completed', 'balanced');
 });
 
 afterEach(() => {
@@ -35,9 +49,9 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-function f(path: string, sha: string, size = 100): UpsertFileInput {
+function f(path: string, sha: string, size = 100, ntfsFileId: string | null = null, overrideDriveId?: string): UpsertFileInput {
   return {
-    driveId,
+    driveId: overrideDriveId ?? driveId,
     path,
     name: path.split('/').pop()!,
     extension: 'jpg',
@@ -51,7 +65,7 @@ function f(path: string, sha: string, size = 100): UpsertFileInput {
     width: null,
     height: null,
     durationSeconds: null,
-    ntfsFileId: null,
+    ntfsFileId,
     state: 'indexed',
     scanId: 's1',
   };
@@ -95,5 +109,52 @@ describe('detectDuplicates', () => {
     files.upsertOne(f('/a.jpg', 'h1', 0));
     files.upsertOne(f('/b.jpg', 'h1', 0));
     expect(detectDuplicates(db, { minSizeBytes: 0 })).toHaveLength(0);
+  });
+});
+
+describe('detectDuplicates — hardlink collapse', () => {
+  it('two files with same sha256 and same ntfs_file_id on same drive do not appear as a duplicate group', () => {
+    const files = new FilesRepo(db);
+    files.upsertOne(f('/a.jpg', 'h1', 1000, '12345'));
+    files.upsertOne(f('/b.jpg', 'h1', 1000, '12345'));
+    const groups = detectDuplicates(db, { minSizeBytes: 0 });
+    expect(groups).toHaveLength(0);
+  });
+
+  it('three copies two of which are hardlinks — group has 2 distinct copies, reclaimableBytes = 1 * size, samePhysicalFile true', () => {
+    const files = new FilesRepo(db);
+    files.upsertOne(f('/a.jpg', 'h1', 1000, '10'));
+    files.upsertOne(f('/b.jpg', 'h1', 1000, '10'));
+    files.upsertOne(f('/c.jpg', 'h1', 1000, '20'));
+    const groups = detectDuplicates(db, { minSizeBytes: 0 });
+    expect(groups).toHaveLength(1);
+    const group = groups[0]!;
+    expect(group.copies).toHaveLength(2);
+    expect(group.reclaimableBytes).toBe(1000);
+    expect(group.samePhysicalFile).toBe(true);
+  });
+
+  it('null ntfs_file_id (POSIX) — behaviour unchanged, samePhysicalFile falsy', () => {
+    const files = new FilesRepo(db);
+    files.upsertOne(f('/a.jpg', 'h1', 500, null));
+    files.upsertOne(f('/b.jpg', 'h1', 500, null));
+    const groups = detectDuplicates(db, { minSizeBytes: 0 });
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.copies).toHaveLength(2);
+    expect(groups[0]!.reclaimableBytes).toBe(500);
+    expect(groups[0]!.samePhysicalFile).toBeFalsy();
+  });
+
+  it('cross-drive hardlinks are NOT collapsed — same ntfsFileId on different drives counts as 2 distinct copies', () => {
+    const files = new FilesRepo(db);
+    files.upsertOne(f('/a.jpg', 'h1', 800, '99', driveId));
+    files.upsertOne(f('/b.jpg', 'h1', 800, '99', driveId2));
+    const groups = detectDuplicates(db, { minSizeBytes: 0 });
+    expect(groups).toHaveLength(1);
+    const copies: DuplicateCopy[] = groups[0]!.copies;
+    expect(copies).toHaveLength(2);
+    const driveIds = copies.map((c) => c.driveId);
+    expect(driveIds).toContain(driveId);
+    expect(driveIds).toContain(driveId2);
   });
 });

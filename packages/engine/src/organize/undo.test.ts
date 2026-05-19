@@ -252,6 +252,68 @@ describe('undoBatch', () => {
     ).rejects.toThrow(/nope/);
   });
 
+  it('refuses to undo a cross-drive move when the destination hash has drifted (post_hash mismatch)', async () => {
+    const sourceDriveId = seedDrive('SRC-T');
+    const destDriveId = seedDrive('DST-T');
+    seedScan(sourceDriveId);
+    const ruleId = seedRule();
+    const sourceRoot = resolve(dir, 'SRC-T');
+    const destRoot = resolve(dir, 'DST-T');
+    const sourcePath = resolve(sourceRoot, 'tamper.jpg');
+    const destPath = resolve(destRoot, 'Photos', 'tamper.jpg');
+    const fileId = seedFile(sourceDriveId, sourcePath, 'original-content');
+
+    const apply = await applyApprovedBatch({
+      db,
+      description: 'forward cross-drive',
+      operations: [
+        plannedOp(
+          fileId,
+          ruleId,
+          'cross-drive-move',
+          sourceDriveId,
+          sourcePath,
+          destDriveId,
+          destPath,
+        ),
+      ],
+      driveRoots: new Map([
+        [sourceDriveId, sourceRoot],
+        [destDriveId, destRoot],
+      ]),
+      chunkBytes: 64 * 1024,
+    });
+
+    expect(existsSync(destPath)).toBe(true);
+    expect(existsSync(sourcePath)).toBe(false);
+
+    // Verify post_hash was recorded on the completed op
+    const opRow = db
+      .prepare(
+        `SELECT post_hash FROM operations WHERE batch_id = ? AND kind = 'copy' ORDER BY id DESC LIMIT 1`,
+      )
+      .get(apply.batchId) as { post_hash: string | null };
+    expect(opRow.post_hash).toBe(sha('original-content'));
+
+    // Tamper with the destination to trigger mismatch
+    writeFileSync(destPath, 'tampered-content-different');
+
+    const undo = await undoBatch({
+      db,
+      batchId: apply.batchId,
+      driveRoots: new Map([
+        [sourceDriveId, sourceRoot],
+        [destDriveId, destRoot],
+      ]),
+    });
+
+    // The undo must be refused: skipped=1, reverted=0, errors contains the mismatch reason
+    expect(undo.reverted).toBe(0);
+    expect(undo.skipped).toBe(1);
+    expect(undo.errors).toHaveLength(1);
+    expect(undo.errors[0]!.reason).toMatch(/post_hash/);
+  });
+
   it('rolls back source restore when dest unlink fails on cross-drive undo', async () => {
     const sourceDriveId = seedDrive('SRC');
     const destDriveId = seedDrive('DST');
@@ -434,5 +496,178 @@ describe('undoBatch', () => {
       )
       .get(sourcePath, apply.batchId) as { id: number } | undefined;
     expect(qAfter).toBeUndefined();
+  });
+
+  it('failed undo of a cross-drive completed op records the undo op with kind="restore", not "copy"', async () => {
+    const sourceDriveId = seedDrive('SRC-FK');
+    const destDriveId = seedDrive('DST-FK');
+    seedScan(sourceDriveId);
+    const ruleId = seedRule();
+    const sourceRoot = resolve(dir, 'SRC-FK');
+    const destRoot = resolve(dir, 'DST-FK');
+    const sourcePath = resolve(sourceRoot, 'fk.jpg');
+    const destPath = resolve(destRoot, 'Photos', 'fk.jpg');
+    const fileId = seedFile(sourceDriveId, sourcePath, 'content-fk');
+
+    const apply = await applyApprovedBatch({
+      db,
+      description: 'forward cross-drive fk',
+      operations: [
+        plannedOp(
+          fileId,
+          ruleId,
+          'cross-drive-move',
+          sourceDriveId,
+          sourcePath,
+          destDriveId,
+          destPath,
+        ),
+      ],
+      driveRoots: new Map([
+        [sourceDriveId, sourceRoot],
+        [destDriveId, destRoot],
+      ]),
+      chunkBytes: 64 * 1024,
+    });
+    expect(existsSync(destPath)).toBe(true);
+
+    // Tamper dest so hash verification fails, triggering the failure path.
+    writeFileSync(destPath, 'tampered-fk');
+
+    const undo = await undoBatch({
+      db,
+      batchId: apply.batchId,
+      driveRoots: new Map([
+        [sourceDriveId, sourceRoot],
+        [destDriveId, destRoot],
+      ]),
+    });
+
+    expect(undo.reverted).toBe(0);
+    expect(undo.skipped).toBe(1);
+    expect(undo.errors).toHaveLength(1);
+
+    // The failed undo op must use kind='restore' (inverse of cross-drive 'copy'),
+    // NOT 'copy' (the original op.kind).
+    const failedOp = db
+      .prepare(
+        `SELECT kind, status FROM operations WHERE batch_id = ? AND status = 'failed' ORDER BY id DESC LIMIT 1`,
+      )
+      .get(undo.undoBatchId) as { kind: string; status: string } | undefined;
+    expect(failedOp).toBeDefined();
+    expect(failedOp!.kind).toBe('restore');
+    expect(failedOp!.kind).not.toBe('copy');
+  });
+
+  it('failed undo of a same-drive completed op records the undo op with kind="move"', async () => {
+    const driveId = seedDrive('V-FK');
+    seedScan(driveId);
+    const ruleId = seedRule();
+    const root = resolve(dir, 'V-FK');
+    const sourcePath = resolve(root, 'sd.jpg');
+    const destPath = resolve(root, 'Photos', 'sd.jpg');
+    const fileId = seedFile(driveId, sourcePath, 'content-sd');
+
+    const apply = await applyApprovedBatch({
+      db,
+      description: 'forward same-drive fk',
+      operations: [
+        plannedOp(fileId, ruleId, 'same-drive-move', driveId, sourcePath, driveId, destPath),
+      ],
+      driveRoots: new Map([[driveId, root]]),
+      chunkBytes: 64 * 1024,
+    });
+    expect(existsSync(destPath)).toBe(true);
+
+    // Tamper dest so hash verification fails.
+    writeFileSync(destPath, 'tampered-sd');
+
+    const undo = await undoBatch({
+      db,
+      batchId: apply.batchId,
+      driveRoots: new Map([[driveId, root]]),
+    });
+
+    expect(undo.reverted).toBe(0);
+    expect(undo.skipped).toBe(1);
+    expect(undo.errors).toHaveLength(1);
+
+    const failedOp = db
+      .prepare(
+        `SELECT kind, status FROM operations WHERE batch_id = ? AND status = 'failed' ORDER BY id DESC LIMIT 1`,
+      )
+      .get(undo.undoBatchId) as { kind: string; status: string } | undefined;
+    expect(failedOp).toBeDefined();
+    expect(failedOp!.kind).toBe('move');
+  });
+
+  it('kind counts for a mixed-result undo batch are consistent', async () => {
+    // Two ops in the forward batch: one same-drive (succeeds undo), one cross-drive (fails undo).
+    const driveA = seedDrive('MIX-A');
+    const driveB = seedDrive('MIX-B');
+    seedScan(driveA);
+    const ruleId = seedRule();
+    const rootA = resolve(dir, 'MIX-A');
+    const rootB = resolve(dir, 'MIX-B');
+
+    // Same-drive op (will succeed undo).
+    const pathA1 = resolve(rootA, 'mix1.jpg');
+    const pathA2 = resolve(rootA, 'Photos', 'mix1.jpg');
+    const fileA = seedFile(driveA, pathA1, 'content-a');
+
+    // Cross-drive op (will fail undo due to hash tamper).
+    const pathB1 = resolve(rootA, 'mix2.jpg');
+    const pathB2 = resolve(rootB, 'Photos', 'mix2.jpg');
+    const fileB = seedFile(driveA, pathB1, 'content-b');
+
+    const apply = await applyApprovedBatch({
+      db,
+      description: 'forward mixed',
+      operations: [
+        plannedOp(fileA, ruleId, 'same-drive-move', driveA, pathA1, driveA, pathA2),
+        plannedOp(fileB, ruleId, 'cross-drive-move', driveA, pathB1, driveB, pathB2),
+      ],
+      driveRoots: new Map([
+        [driveA, rootA],
+        [driveB, rootB],
+      ]),
+      chunkBytes: 64 * 1024,
+    });
+
+    // Tamper cross-drive dest to trigger failure in undo.
+    writeFileSync(pathB2, 'tampered-b');
+
+    const undo = await undoBatch({
+      db,
+      batchId: apply.batchId,
+      driveRoots: new Map([
+        [driveA, rootA],
+        [driveB, rootB],
+      ]),
+    });
+
+    // One succeeds, one fails (skipped counts the error).
+    expect(undo.reverted).toBe(1);
+    expect(undo.errors).toHaveLength(1);
+
+    // Query kind counts on the undo batch.
+    const counts = db
+      .prepare(
+        `SELECT kind, COUNT(*) AS cnt FROM operations WHERE batch_id = ? GROUP BY kind ORDER BY kind`,
+      )
+      .all(undo.undoBatchId) as { kind: string; cnt: number }[];
+
+    // All undo ops should use inverse-undo kinds: 'move' for same-drive, 'restore' for cross-drive.
+    // There must be NO 'copy' rows (that would mean the bug is present).
+    const copyRow = counts.find((r) => r.kind === 'copy');
+    expect(copyRow).toBeUndefined();
+
+    const moveRow = counts.find((r) => r.kind === 'move');
+    expect(moveRow).toBeDefined();
+    expect(moveRow!.cnt).toBe(1);
+
+    const restoreRow = counts.find((r) => r.kind === 'restore');
+    expect(restoreRow).toBeDefined();
+    expect(restoreRow!.cnt).toBe(1);
   });
 });

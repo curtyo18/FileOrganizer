@@ -1,11 +1,17 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { openCatalog, closeCatalog, type Catalog } from './connection.js';
 import { migrate } from './migrate.js';
 import { reconcileOnStartup } from './reconcile.js';
+import { QUARANTINE_DIR_NAME } from '../quarantine/quarantine.js';
+import { DriveRepo } from '../drives/repo.js';
+import { FilesRepo } from './files-repo.js';
+import { RulesRepo } from '../rules/repo.js';
+import { applyApprovedBatch } from '../organize/applier.js';
+import type { PlannedOperation } from '../organize/planner.js';
 
 const sha = (s: string): string => createHash('sha256').update(s).digest('hex');
 
@@ -33,6 +39,10 @@ interface OpInsert {
   status: string;
 }
 
+interface OpInsertFull extends OpInsert {
+  quarantine_path?: string | null;
+}
+
 function insertOp(values: OpInsert): number {
   const result = db
     .prepare(
@@ -47,6 +57,25 @@ function insertOp(values: OpInsert): number {
       values.pre_hash,
       values.post_hash,
       values.status,
+    );
+  return Number(result.lastInsertRowid);
+}
+
+function insertOpFull(values: OpInsertFull): number {
+  const result = db
+    .prepare(
+      `INSERT INTO operations (batch_id, kind, source_path, dest_path, pre_hash, post_hash, status, quarantine_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      values.batch_id,
+      values.kind,
+      values.source_path,
+      values.dest_path,
+      values.pre_hash,
+      values.post_hash,
+      values.status,
+      values.quarantine_path ?? null,
     );
   return Number(result.lastInsertRowid);
 }
@@ -199,8 +228,6 @@ describe('reconcileOnStartup – atomicity', () => {
 });
 
 describe('reconcileOnStartup – quarantine orphan detection', () => {
-  const QUARANTINE_DIR = '_FileOrganizer_quarantine';
-
   beforeEach(() => {
     // Insert a drive with a real mount_path pointing into our temp dir
     db.prepare(
@@ -217,8 +244,8 @@ describe('reconcileOnStartup – quarantine orphan detection', () => {
   it('detects a quarantine orphan – file on disk with no quarantine row', async () => {
     // Simulate a crash after renameSync but before INSERT INTO quarantine:
     // create the file under the quarantine folder without a DB row
-    const orphanPath = join(dir, QUARANTINE_DIR, 'batchA', 'photos', 'img.jpg');
-    mkdirSync(join(dir, QUARANTINE_DIR, 'batchA', 'photos'), { recursive: true });
+    const orphanPath = join(dir, QUARANTINE_DIR_NAME, 'batchA', 'photos', 'img.jpg');
+    mkdirSync(join(dir, QUARANTINE_DIR_NAME, 'batchA', 'photos'), { recursive: true });
     writeFileSync(orphanPath, 'orphan-content');
 
     // No quarantine row inserted — DB has no record of this file
@@ -233,8 +260,8 @@ describe('reconcileOnStartup – quarantine orphan detection', () => {
 
   it('does NOT classify a legitimately-present quarantine file as an orphan', async () => {
     // Create the file under the quarantine folder
-    const quarantinePath = join(dir, QUARANTINE_DIR, 'batchA', 'docs', 'report.pdf');
-    mkdirSync(join(dir, QUARANTINE_DIR, 'batchA', 'docs'), { recursive: true });
+    const quarantinePath = join(dir, QUARANTINE_DIR_NAME, 'batchA', 'docs', 'report.pdf');
+    mkdirSync(join(dir, QUARANTINE_DIR_NAME, 'batchA', 'docs'), { recursive: true });
     writeFileSync(quarantinePath, 'legit-content');
 
     // Insert a matching quarantine row
@@ -248,5 +275,299 @@ describe('reconcileOnStartup – quarantine orphan detection', () => {
 
     expect(result.quarantineOrphans).toBeDefined();
     expect(result.quarantineOrphans).toHaveLength(0);
+  });
+});
+
+// Helpers shared by the pipeline test below
+function seedDriveRec(db: Catalog, label: string, mountPath: string): string {
+  return new DriveRepo(db).upsert({
+    volumeSerial: `serial-rec-${label}`,
+    label,
+    currentLetter: null,
+    mountPath,
+    kind: 'local',
+    roles: [],
+    totalBytes: 1_000_000,
+    freeBytes: 800_000,
+  }).id;
+}
+
+function seedScanRec(db: Catalog, driveId: string): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO scans (id, drive_id, started_at, status, throttle_profile)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).run('scan-rec-1', driveId, new Date().toISOString(), 'completed', 'balanced');
+}
+
+function seedFileRec(db: Catalog, driveId: string, path: string, content: string): number {
+  mkdirSync(resolve(path, '..'), { recursive: true });
+  writeFileSync(path, content);
+  new FilesRepo(db).upsertOne({
+    driveId,
+    path,
+    name: path.split(/[\\/]/).pop()!,
+    extension: 'jpg',
+    sizeBytes: Buffer.byteLength(content),
+    category: 'image',
+    sha256: createHash('sha256').update(content).digest('hex'),
+    mtime: '2024-01-01T00:00:00.000Z',
+    ctime: '2024-01-01T00:00:00.000Z',
+    exifDate: null,
+    dateSource: 'mtime',
+    width: null,
+    height: null,
+    durationSeconds: null,
+    ntfsFileId: null,
+    state: 'indexed',
+    scanId: 'scan-rec-1',
+  });
+  return (db.prepare(`SELECT id FROM files WHERE path = ?`).get(path) as { id: number }).id;
+}
+
+describe('reconcileOnStartup – post_hash written by production applier', () => {
+  it('reconcile marks a crashed cross-drive copy completed when post_hash is set and dest matches', async () => {
+    // Set up two drives in the same temp dir
+    const srcRoot = join(dir, 'SRC');
+    const dstRoot = join(dir, 'DST');
+    mkdirSync(srcRoot, { recursive: true });
+    mkdirSync(dstRoot, { recursive: true });
+
+    const srcDriveId = seedDriveRec(db, 'SRC', srcRoot);
+    const dstDriveId = seedDriveRec(db, 'DST', dstRoot);
+    seedScanRec(db, srcDriveId);
+
+    const ruleId = new RulesRepo(db).create({
+      name: 'r-rec',
+      priority: 100,
+      match: { category: ['image'] },
+      destinationRole: 'photos',
+      destinationTemplate: 'Photos/{filename}',
+      movePolicy: 'always-review',
+      quarantinePolicy: 'default',
+    }).id;
+
+    const srcPath = join(srcRoot, 'photo.jpg');
+    const dstPath = join(dstRoot, 'Photos', 'photo.jpg');
+    const fileId = seedFileRec(db, srcDriveId, srcPath, 'test-content');
+
+    const applyOp: PlannedOperation = {
+      fileId,
+      ruleId,
+      sourceDriveId: srcDriveId,
+      sourcePath: srcPath,
+      destDriveId: dstDriveId,
+      destPath: dstPath,
+      kind: 'cross-drive-move',
+      estimatedBytes: 12,
+    };
+
+    const applyResult = await applyApprovedBatch({
+      db,
+      description: 'test forward move',
+      operations: [applyOp],
+      driveRoots: new Map([
+        [srcDriveId, srcRoot],
+        [dstDriveId, dstRoot],
+      ]),
+      chunkBytes: 64 * 1024,
+    });
+
+    // Verify the applier wrote post_hash on the operation row
+    const opRow = db
+      .prepare(
+        `SELECT post_hash, quarantine_path FROM operations
+         WHERE batch_id = ? AND kind = 'copy' ORDER BY id DESC LIMIT 1`,
+      )
+      .get(applyResult.batchId) as { post_hash: string | null; quarantine_path: string | null };
+
+    // post_hash must be written (this is what B3 fixes)
+    expect(opRow.post_hash).toBe(createHash('sha256').update('test-content').digest('hex'));
+    // quarantine_path must be recorded so reconcile can walk it
+    expect(opRow.quarantine_path).toBeTruthy();
+
+    // Simulate a crash: force the op back to in-progress
+    db.prepare(`UPDATE operations SET status = 'in-progress' WHERE batch_id = ?`).run(
+      applyResult.batchId,
+    );
+
+    // Now reconcile — dest is present and matches post_hash → should mark completed
+    const reconcileResult = await reconcileOnStartup(db);
+
+    const reconciledOp = db
+      .prepare(`SELECT status FROM operations WHERE batch_id = ? AND kind = 'copy'`)
+      .get(applyResult.batchId) as { status: string };
+
+    expect(reconciledOp.status).toBe('completed');
+    expect(reconcileResult.fixed).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('reconcileOnStartup – per-kind post-conditions', () => {
+  beforeEach(() => {
+    db.prepare(
+      `INSERT INTO batches (id, kind, started_at, status, description, summary) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run('bk1', 'move', '2024-01-01T00:00:00Z', 'in-progress', 't', '{}');
+  });
+
+  it('move op: dest matches post_hash AND source still present → failed with anomaly message', async () => {
+    const src = join(dir, 'src-move.jpg');
+    const dest = join(dir, 'dest-move.jpg');
+    const content = 'move-content';
+    writeFileSync(src, content);
+    writeFileSync(dest, content);
+    const hash = createHash('sha256').update(content).digest('hex');
+
+    const opId = insertOp({
+      batch_id: 'bk1',
+      kind: 'move',
+      source_path: src,
+      dest_path: dest,
+      pre_hash: hash,
+      post_hash: hash,
+      status: 'in-progress',
+    });
+
+    const result = await reconcileOnStartup(db);
+    const op = db.prepare(`SELECT status, error_message FROM operations WHERE id = ?`).get(opId) as {
+      status: string;
+      error_message: string;
+    };
+    expect(op.status).toBe('failed');
+    expect(op.error_message).toMatch(/source still present/);
+    // A definite (non-ambiguous) failed verdict counts as fixed, not ambiguous
+    expect(result.ambiguous).toBe(0);
+    expect(result.fixed).toBeGreaterThanOrEqual(1);
+  });
+
+  it('hashFile throws → warn-logged with op id; classification uses distinct message', async () => {
+    const hasherModule = await import('../scan/hasher.js');
+    const spy = vi.spyOn(hasherModule, 'hashFile').mockRejectedValueOnce(new Error('EACCES: permission denied'));
+
+    // Capture log output via process.stderr — the module-level logger writes there via defaultWriter.
+    const captured: string[] = [];
+    const stderrAny = process.stderr as unknown as { write: (chunk: string) => boolean };
+    const originalWrite = stderrAny.write.bind(process.stderr);
+    stderrAny.write = (chunk: string) => {
+      captured.push(chunk);
+      return originalWrite(chunk);
+    };
+
+    const content = 'hash-error-content';
+    const dest = join(dir, 'dest-hash-error.jpg');
+    writeFileSync(dest, content);
+    const hash = createHash('sha256').update(content).digest('hex');
+
+    const opId = insertOp({
+      batch_id: 'bk1',
+      kind: 'move',
+      source_path: join(dir, 'gone-src'),
+      dest_path: dest,
+      pre_hash: hash,
+      post_hash: hash,
+      status: 'in-progress',
+    });
+
+    await reconcileOnStartup(db);
+
+    // Restore
+    stderrAny.write = originalWrite;
+    spy.mockRestore();
+
+    const warnLines = captured.filter((l) => l.includes('reconcile-hash-error'));
+    expect(warnLines.length).toBeGreaterThanOrEqual(1);
+    const parsed = JSON.parse(warnLines[0]!.trim()) as { op_id?: number; level?: string };
+    expect(parsed.op_id).toBe(opId);
+    expect(parsed.level).toBe('warn');
+  });
+
+  it('quarantine op: quarantine_path file exists on disk → completed', async () => {
+    const qPath = join(dir, 'q-batch', 'file.jpg');
+    mkdirSync(join(dir, 'q-batch'), { recursive: true });
+    writeFileSync(qPath, 'quarantine-content');
+
+    const opId = insertOpFull({
+      batch_id: 'bk1',
+      kind: 'quarantine',
+      source_path: join(dir, 'original.jpg'),
+      dest_path: null,
+      pre_hash: null,
+      post_hash: null,
+      status: 'in-progress',
+      quarantine_path: qPath,
+    });
+
+    const result = await reconcileOnStartup(db);
+    const op = db.prepare(`SELECT status FROM operations WHERE id = ?`).get(opId) as {
+      status: string;
+    };
+    expect(op.status).toBe('completed');
+    expect(result.fixed).toBeGreaterThanOrEqual(1);
+  });
+
+  it('quarantine op: quarantine_path missing from disk → failed', async () => {
+    const missingQPath = join(dir, 'q-batch-missing', 'file.jpg');
+    // Directory and file are NOT created — simulates a quarantine that never landed on disk
+
+    const opId = insertOpFull({
+      batch_id: 'bk1',
+      kind: 'quarantine',
+      source_path: join(dir, 'original.jpg'),
+      dest_path: null,
+      pre_hash: null,
+      post_hash: null,
+      status: 'in-progress',
+      quarantine_path: missingQPath,
+    });
+
+    const result = await reconcileOnStartup(db);
+    const op = db.prepare(`SELECT status, error_message FROM operations WHERE id = ?`).get(opId) as {
+      status: string;
+      error_message: string;
+    };
+    expect(op.status).toBe('failed');
+    expect(op.error_message).toBeTruthy();
+    expect(result.fixed).toBeGreaterThanOrEqual(1);
+  });
+
+  it('restore op: original (op.dest_path) present and op.quarantine_path absent → completed', async () => {
+    const restoreDest = join(dir, 'restored.jpg');
+    writeFileSync(restoreDest, 'restored-content');
+    const missingQPath = join(dir, 'q-batch-gone', 'file.jpg');
+
+    const opId = insertOpFull({
+      batch_id: 'bk1',
+      kind: 'restore',
+      source_path: null,
+      dest_path: restoreDest,
+      pre_hash: null,
+      post_hash: null,
+      status: 'in-progress',
+      quarantine_path: missingQPath,
+    });
+
+    const result = await reconcileOnStartup(db);
+    const op = db.prepare(`SELECT status FROM operations WHERE id = ?`).get(opId) as {
+      status: string;
+    };
+    expect(op.status).toBe('completed');
+    expect(result.fixed).toBeGreaterThanOrEqual(1);
+  });
+
+  it('counter uses ambiguous field — both source and dest missing yields ambiguous: true and increments count', async () => {
+    insertOp({
+      batch_id: 'bk1',
+      kind: 'move',
+      source_path: join(dir, 'gone-src-amb'),
+      dest_path: join(dir, 'gone-dest-amb'),
+      pre_hash: 'x',
+      post_hash: 'y',
+      status: 'in-progress',
+    });
+
+    const result = await reconcileOnStartup(db);
+    // Both missing → ambiguous
+    expect(result.ambiguous).toBeGreaterThanOrEqual(1);
+    // fixed should NOT include this op
+    expect(result.fixed).toBe(0);
   });
 });

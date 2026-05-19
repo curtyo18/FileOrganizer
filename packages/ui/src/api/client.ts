@@ -63,6 +63,7 @@ export interface DuplicateGroupUI {
   copies: DuplicateCopyUI[];
   fileSizeBytes: number;
   reclaimableBytes: number;
+  samePhysicalFile?: boolean;
 }
 
 export interface DedupeOperation {

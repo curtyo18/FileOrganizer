@@ -9,6 +9,7 @@ export interface DuplicateCopy {
   category: Category;
   state: FileState;
   mtime: string;
+  ntfsFileId: string | null;
 }
 
 export interface DuplicateGroup {
@@ -16,6 +17,7 @@ export interface DuplicateGroup {
   copies: DuplicateCopy[];
   fileSizeBytes: number;
   reclaimableBytes: number;
+  samePhysicalFile?: boolean;
 }
 
 export interface DetectOptions {
@@ -39,20 +41,51 @@ export function detectDuplicates(db: Catalog, opts: DetectOptions): DuplicateGro
        LIMIT ? OFFSET ?`,
     )
     .all(minSize, limit, offset) as { sha256: string; copies: number; size: number }[];
-  return hashes.map((row) => {
+  const groups: DuplicateGroup[] = [];
+  for (const row of hashes) {
     const copies = db
       .prepare(
         `SELECT id AS fileId, drive_id AS driveId, path, size_bytes AS sizeBytes,
-                category, state, mtime FROM files WHERE sha256 = ? AND state = 'indexed'`,
+                category, state, mtime, ntfs_file_id AS ntfsFileId
+         FROM files WHERE sha256 = ? AND state = 'indexed'`,
       )
       .all(row.sha256) as DuplicateCopy[];
-    return {
+
+    // Collapse hardlinks: files on the same drive with the same ntfsFileId share
+    // physical bytes. Keep one representative per (driveId, ntfsFileId) where
+    // ntfsFileId is non-null; treat null ntfsFileIds as distinct physical files
+    // (POSIX or pre-population legacy rows).
+    const seen = new Set<string>();
+    const collapsed: DuplicateCopy[] = [];
+    let collapsedAny = false;
+    for (const copy of copies) {
+      if (copy.ntfsFileId != null) {
+        const key = `${copy.driveId}:${copy.ntfsFileId}`;
+        if (seen.has(key)) {
+          collapsedAny = true;
+          continue; // drop hardlinked duplicate
+        }
+        seen.add(key);
+      }
+      collapsed.push(copy);
+    }
+
+    if (collapsed.length < 2) continue; // not actually duplicates after collapse
+
+    const distinctSize = collapsed[0]!.sizeBytes;
+    const reclaimableBytes = (collapsed.length - 1) * distinctSize;
+    const group: DuplicateGroup = {
       sha256: row.sha256,
-      copies,
-      fileSizeBytes: row.size,
-      reclaimableBytes: (copies.length - 1) * row.size,
+      copies: collapsed,
+      fileSizeBytes: distinctSize,
+      reclaimableBytes,
     };
-  });
+    if (collapsedAny) {
+      group.samePhysicalFile = true;
+    }
+    groups.push(group);
+  }
+  return groups;
 }
 
 export function countDuplicateGroups(db: Catalog, opts: { minSizeBytes: number }): number {

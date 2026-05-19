@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { walk, type WalkOptions, MAX_DEPTH } from './walker.js';
 import type { Logger } from '../log.js';
+import { drain } from '../test-helpers/iter.js';
 
 let root: string;
 
@@ -75,11 +76,14 @@ describe('walk', () => {
 
   it('reports size and mtime for emitted files', async () => {
     touch('a.jpg', 'hello');
+    const entries = [];
     for await (const entry of walk({ ...opts, roots: [root] })) {
-      expect(entry.sizeBytes).toBe(5);
-      expect(typeof entry.mtime).toBe('string');
-      expect(entry.extension).toBe('jpg');
+      entries.push(entry);
     }
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.sizeBytes).toBe(5);
+    expect(typeof entries[0]!.mtime).toBe('string');
+    expect(entries[0]!.extension).toBe('jpg');
   });
 });
 
@@ -135,14 +139,11 @@ describe('walk onEmptyDir', () => {
   it('emits onEmptyDir deepest-first as it unwinds', async () => {
     mkdirSync(join(root, 'a', 'b', 'c'), { recursive: true });
     const fired: string[] = [];
-    for await (const _ of walk({
+    await drain(walk({
       ...opts,
       roots: [root],
       onEmptyDir: (p) => fired.push(p),
-    })) {
-      // drain
-      void _;
-    }
+    }));
     expect(fired).toEqual([
       join(root, 'a', 'b', 'c'),
       join(root, 'a', 'b'),
@@ -155,14 +156,12 @@ describe('walk onEmptyDir', () => {
     const controller = new AbortController();
     controller.abort();
     const fired: string[] = [];
-    for await (const _ of walk({
+    await drain(walk({
       ...opts,
       roots: [root],
       signal: controller.signal,
       onEmptyDir: (p) => fired.push(p),
-    })) {
-      void _;
-    }
+    }));
     expect(fired).toHaveLength(0);
   });
 
@@ -173,7 +172,7 @@ describe('walk onEmptyDir', () => {
     const controller = new AbortController();
     const fired: string[] = [];
     let i = 0;
-    for await (const _ of walk({
+    await drain(walk({
       ...opts,
       roots: [root],
       signal: controller.signal,
@@ -182,13 +181,123 @@ describe('walk onEmptyDir', () => {
         i += 1;
         if (i === 5) controller.abort();
       },
-    })) {
-      void _;
-    }
+    }));
     // Walker checks signal at the top of each child iteration. With 50
     // sibling empty leaves, aborting from inside the 5th callback leaves
     // exactly 5 callbacks fired.
     expect(fired).toHaveLength(5);
+  });
+});
+
+describe('walk error logging', () => {
+  it('logs walker-readdir-error when readdir fails on a subdirectory and continues the walk', async () => {
+    // Create a dir structure: root/readable/a.jpg + root/unreadable/
+    // We simulate unreadable by making it a file at a path we pass as a root's child.
+    // The simplest approach: add a second root that does not exist.
+    touch('readable/a.jpg');
+    // Pass a non-existent directory as an additional root — realpath will fail,
+    // which fires the existing walker-realpath-error. For readdir specifically,
+    // we need a dir entry that readdir can't open. We simulate this by creating
+    // a symlink to a non-existent target so readdir of it fails.
+    const brokenDir = join(root, 'broken-link');
+    symlinkSync(join(root, 'nonexistent'), brokenDir);
+
+    // A symlink to a non-existent target will cause stat to fail (broken symlink),
+    // which exercises the symlink-stat catch. For the readdir catch we need an
+    // unreadable real directory. We can use a second root that is a non-existent path.
+    // The walker-realpath-error fires, not walker-readdir-error, for roots.
+    // Instead, let's create a real subdirectory and chmod it unreadable.
+    const unreadable = join(root, 'unreadable');
+    mkdirSync(unreadable);
+    // Make unreadable on POSIX
+    const { chmodSync } = await import('node:fs');
+    chmodSync(unreadable, 0o000);
+
+    const { logger, warns } = makeLogger();
+    const seen: string[] = [];
+    try {
+      for await (const entry of walk({ ...opts, roots: [root], log: logger })) {
+        seen.push(entry.path.replace(root, '').replace(/\\/g, '/'));
+      }
+    } finally {
+      chmodSync(unreadable, 0o755);
+    }
+    // readable/a.jpg should still be visited
+    expect(seen).toContain('/readable/a.jpg');
+    // a readdir-error warning must have been logged for the unreadable dir
+    const readdirWarn = warns.find((w) => w.msg === 'walker-readdir-error');
+    expect(readdirWarn).toBeDefined();
+    expect(readdirWarn?.fields['path']).toBe(unreadable);
+    expect(typeof readdirWarn?.fields['err']).toBe('string');
+  });
+
+  it('logs walker-stat-error (kind: symlink) when stat on a symlink target fails and continues', async () => {
+    // A symlink pointing to a non-existent target — stat follows the link and
+    // throws ENOENT. The walker should skip the entry and log the warning.
+    touch('keep.jpg');
+    const brokenSym = join(root, 'broken.jpg'); // extension matches allowlist
+    symlinkSync(join(root, 'nonexistent.jpg'), brokenSym);
+
+    const { logger, warns } = makeLogger();
+    const seen: string[] = [];
+    for await (const entry of walk({ ...opts, roots: [root], log: logger })) {
+      seen.push(entry.path.replace(root, '').replace(/\\/g, '/'));
+    }
+    // The regular file is still returned
+    expect(seen).toContain('/keep.jpg');
+    // broken symlink should NOT appear in results
+    expect(seen).not.toContain('/broken.jpg');
+    // A stat-error warning with kind 'symlink' must be logged
+    const statWarn = warns.find((w) => w.msg === 'walker-stat-error');
+    expect(statWarn).toBeDefined();
+    expect(statWarn?.fields['kind']).toBe('symlink');
+    expect(statWarn?.fields['path']).toBe(brokenSym);
+    expect(typeof statWarn?.fields['err']).toBe('string');
+  });
+
+  it('logs walker-stat-error (kind: file) when stat on a regular file entry fails and continues', async () => {
+    // We need a file that readdir returns as isFile() but stat fails on.
+    // The simplest approach: create a file, then replace it with a dangling
+    // symlink at the same path (entry.isFile() returns false for symlinks, so
+    // this won't work). Instead we use a race condition simulation: create the
+    // file, walk, but remove it between readdir and stat.
+    // A cleaner approach for testing: use a subdirectory that contains only
+    // a file we delete right after readdir sees it. This is hard to time.
+    // Instead: create a named pipe (FIFO) — readdir reports it as a file
+    // (isFile() = true on Linux) but stat may behave differently, or we
+    // can create a regular file and use a custom approach.
+    // Actually the simplest: create a real file but make its parent dir
+    // unexecutable after readdir, then restore. This is too racy.
+    // Best approach: symlink to nonexistent with .jpg extension in a subdirectory
+    // — but isSymbolicLink() is true so it goes the symlink path, not file path.
+    // Given the difficulty of triggering stat failure on an isFile() entry
+    // without races, we test the logging by directly calling walkOne indirectly:
+    // create a file, chmod the parent dir to remove execute bit so stat fails.
+    touch('sub/target.jpg');
+    const subDir = join(root, 'sub');
+    const targetFile = join(subDir, 'target.jpg');
+    const { chmodSync } = await import('node:fs');
+
+    // chmod sub dir to remove execute (x) bit — stat(sub/target.jpg) will fail with EACCES
+    chmodSync(subDir, 0o444); // readable but not executable; stat of children fails
+
+    const { logger, warns } = makeLogger();
+    const seen: string[] = [];
+    try {
+      for await (const entry of walk({ ...opts, roots: [root], log: logger })) {
+        seen.push(entry.path.replace(root, '').replace(/\\/g, '/'));
+      }
+    } finally {
+      chmodSync(subDir, 0o755);
+    }
+    // target.jpg should NOT appear — stat failed
+    expect(seen).not.toContain('/sub/target.jpg');
+    // A stat-error warning with kind 'file' must be logged
+    const statWarn = warns.find((w) => w.msg === 'walker-stat-error');
+    expect(statWarn).toBeDefined();
+    expect(statWarn?.fields['kind']).toBe('file');
+    expect(statWarn?.fields['path']).toBe(targetFile);
+    expect(typeof statWarn?.fields['err']).toBe('string');
   });
 });
 

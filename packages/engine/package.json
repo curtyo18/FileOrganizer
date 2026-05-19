@@ -20,11 +20,11 @@
     "exifr": "^7.1.0",
     "hono": "^4.6.0",
     "picomatch": "^4.0.4",
-    "sharp": "^0.33.5"
+    "sharp": "^0.33.5",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
-    "@types/picomatch": "^4.0.3",
-    "piexifjs": "^1.0.6"
+    "@types/picomatch": "^4.0.3"
   }
 }

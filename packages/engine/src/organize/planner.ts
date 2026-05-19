@@ -1,7 +1,6 @@
 import { isAbsolute, resolve } from 'node:path';
 import type {
   DriveRecord,
-  FileRecord,
   RoleDefinition,
 } from '@fileorganizer/shared';
 import type { Catalog } from '../catalog/connection.js';
@@ -11,6 +10,7 @@ import { RolesRepo } from '../roles/repo.js';
 import { firstMatch, matches } from '../rules/matcher.js';
 import { renderTemplate } from '../rules/template.js';
 import { resolveRole } from '../rules/role-resolver.js';
+import { toFileRecord } from '../catalog/files-repo.js';
 
 type OperationKindPlanned = 'same-drive-move' | 'cross-drive-move' | 'noop';
 
@@ -87,7 +87,7 @@ export function planOrganize(input: PlanInput): OrganizePlan {
     .all() as Record<string, unknown>[];
 
   for (const row of rows) {
-    const file = rowToFileRecord(row);
+    const file = toFileRecord(row);
     for (const rule of rules) {
       if (!rule.enabled) continue;
       if (matches(file, rule)) {
@@ -177,29 +177,5 @@ export function planOrganize(input: PlanInput): OrganizePlan {
     total,
     totalBytes,
     hasMore,
-  };
-}
-
-function rowToFileRecord(row: Record<string, unknown>): FileRecord {
-  return {
-    id: row['id'] as number,
-    driveId: row['drive_id'] as string,
-    path: row['path'] as string,
-    name: row['name'] as string,
-    extension: row['extension'] as string,
-    sizeBytes: row['size_bytes'] as number,
-    category: row['category'] as FileRecord['category'],
-    sha256: row['sha256'] as string,
-    mtime: row['mtime'] as string,
-    ctime: row['ctime'] as string,
-    exifDate: (row['exif_date'] as string | null) ?? null,
-    dateSource: row['date_source'] as FileRecord['dateSource'],
-    width: (row['width'] as number | null) ?? null,
-    height: (row['height'] as number | null) ?? null,
-    durationSeconds: (row['duration_seconds'] as number | null) ?? null,
-    ntfsFileId: (row['ntfs_file_id'] as string | null) ?? null,
-    state: row['state'] as FileRecord['state'],
-    lastVerifiedAt: row['last_verified_at'] as string,
-    scanId: row['scan_id'] as string,
   };
 }

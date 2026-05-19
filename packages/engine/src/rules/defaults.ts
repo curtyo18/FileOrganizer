@@ -1,16 +1,21 @@
 import type { Catalog } from '../catalog/connection.js';
 import { RulesRepo, type CreateRuleInput } from './repo.js';
 
+// Deliberately uses a fixed 365-day year (ignores leap years) for a rough
+// two-year cutoff. This seeder runs once on a fresh catalog to generate
+// starter rules; it does not honour Settings.recentArchiveCutoffYears
+// because those settings may not exist yet when seeding runs.
 const TWO_YEARS_MS = 1000 * 60 * 60 * 24 * 365 * 2;
 
 export function seedDefaultRules(db: Catalog, now: Date = new Date()): number {
   const repo = new RulesRepo(db);
   if (repo.list().length > 0) return 0;
   const cutoff = new Date(now.getTime() - TWO_YEARS_MS).toISOString().slice(0, 10);
-  for (const input of defaultRules(cutoff)) {
+  const rules = defaultRules(cutoff);
+  for (const input of rules) {
     repo.create(input);
   }
-  return 6;
+  return rules.length;
 }
 
 function defaultRules(cutoff: string): CreateRuleInput[] {

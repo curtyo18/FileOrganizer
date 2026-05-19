@@ -37,7 +37,7 @@ function categoryIcon(cat: string): string {
   return 'file';
 }
 
-interface DuplicatesProps extends RoutableProps {}
+type DuplicatesProps = RoutableProps;
 
 export function Duplicates(_props: DuplicatesProps) {
   const api = defaultApiClient();
