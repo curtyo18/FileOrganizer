@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openCatalog, closeCatalog, type Catalog } from '../catalog/connection.js';
@@ -67,6 +67,22 @@ describe('runScan', () => {
     const files = new FilesRepo(db);
     expect(files.findByPath(driveId, join(scanRoot, 'a.jpg'))?.category).toBe('image');
     expect(files.findByPath(driveId, join(scanRoot, 'b.pdf'))?.category).toBe('document');
+  });
+
+  it('scan writes stat.ino as ntfs_file_id for indexed files', async () => {
+    const path = fixture('ntfs-id-test.jpg', 'content');
+    const log = silentLogger();
+    const throttle = new ThrottleManager(defaultThrottleProfiles(2), 'idle', []);
+    await runScan({
+      db, driveId, roots: [scanRoot], categoryMap: DEFAULT_CATEGORY_MAP,
+      throttle, log, mediainfoPath: '/no/such',
+    });
+    const row = db
+      .prepare(`SELECT ntfs_file_id FROM files WHERE path = ?`)
+      .get(path) as { ntfs_file_id: string | null } | undefined;
+    expect(row).toBeDefined();
+    expect(row!.ntfs_file_id).not.toBeNull();
+    expect(row!.ntfs_file_id).toBe(statSync(path).ino.toString());
   });
 
   it('skips re-hashing unchanged files on second scan', async () => {

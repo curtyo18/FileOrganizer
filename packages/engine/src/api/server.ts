@@ -91,7 +91,13 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
         : 500;
       return c.json({ error: err.message, code: err.code }, status);
     }
-    console.error('api-internal-error', { url: c.req.url, err: (err as Error).message });
+    process.stderr.write(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'error',
+      msg: 'api-internal-error',
+      url: c.req.url,
+      err: (err as Error).message,
+    }) + '\n');
     return c.json({ error: 'internal' }, 500);
   });
 
@@ -231,14 +237,10 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       });
     // Race: either onStart fires (normal scan started) or runScan rejects
     // before inserting a scans row (pre-start failure such as VOLUME_SERIAL_MISMATCH).
-    try {
-      await Promise.race([onStartFired, promise]);
-    } catch (err) {
-      // ScanError and DriveError are typed — let onError map them to the right
-      // status codes. Any other error also propagates to onError to avoid leaking
-      // internal messages verbatim.
-      throw err;
-    }
+    // ScanError and DriveError are typed — Hono's onError maps them to the right
+    // status codes. Any other rejection also propagates to onError to avoid leaking
+    // internal messages verbatim.
+    await Promise.race([onStartFired, promise]);
     const scan = scans.findById(registeredId!);
     return c.json({ scan }, 201);
   });

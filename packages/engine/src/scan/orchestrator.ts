@@ -132,21 +132,12 @@ function finishScan(
   summary: { filesIndexed: number; filesUnchanged: number; filesSkipped: number; errors: number },
 ): void {
   ctx.scansRepo.finish(scanId, status, { errors: summary.errors });
-  if (status === 'cancelled') {
-    ctx.log.info('scan-cancelled', {
-      filesIndexed: summary.filesIndexed,
-      filesUnchanged: summary.filesUnchanged,
-      filesSkipped: summary.filesSkipped,
-      errors: summary.errors,
-    });
-  } else {
-    ctx.log.info('scan-completed', {
-      filesIndexed: summary.filesIndexed,
-      filesUnchanged: summary.filesUnchanged,
-      filesSkipped: summary.filesSkipped,
-      errors: summary.errors,
-    });
-  }
+  ctx.log.info(`scan-${status}`, {
+    filesIndexed: summary.filesIndexed,
+    filesUnchanged: summary.filesUnchanged,
+    filesSkipped: summary.filesSkipped,
+    errors: summary.errors,
+  });
 }
 
 export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {

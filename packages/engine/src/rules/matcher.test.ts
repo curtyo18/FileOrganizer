@@ -177,3 +177,17 @@ describe('matcher.dateBefore boundary', () => {
     expect(matches(file, rule)).toBe(true);
   });
 });
+
+describe('matcher.dateAfter boundary', () => {
+  it('dateAfter boundary: fileDate === dateAfter → no match', () => {
+    const file = makeFile({ mtime: '2024-01-01T00:00:00.000Z', exifDate: null });
+    const rule = makeRule({ dateAfter: '2024-01-01T00:00:00.000Z' });
+    expect(matches(file, rule)).toBe(false);
+  });
+
+  it('dateAfter boundary: fileDate > dateAfter → match', () => {
+    const file = makeFile({ mtime: '2024-01-01T00:00:00.001Z', exifDate: null });
+    const rule = makeRule({ dateAfter: '2024-01-01T00:00:00.000Z' });
+    expect(matches(file, rule)).toBe(true);
+  });
+});

@@ -504,6 +504,31 @@ describe('reconcileOnStartup – per-kind post-conditions', () => {
     expect(result.fixed).toBeGreaterThanOrEqual(1);
   });
 
+  it('quarantine op: quarantine_path missing from disk → failed', async () => {
+    const missingQPath = join(dir, 'q-batch-missing', 'file.jpg');
+    // Directory and file are NOT created — simulates a quarantine that never landed on disk
+
+    const opId = insertOpFull({
+      batch_id: 'bk1',
+      kind: 'quarantine',
+      source_path: join(dir, 'original.jpg'),
+      dest_path: null,
+      pre_hash: null,
+      post_hash: null,
+      status: 'in-progress',
+      quarantine_path: missingQPath,
+    });
+
+    const result = await reconcileOnStartup(db);
+    const op = db.prepare(`SELECT status, error_message FROM operations WHERE id = ?`).get(opId) as {
+      status: string;
+      error_message: string;
+    };
+    expect(op.status).toBe('failed');
+    expect(op.error_message).toBeTruthy();
+    expect(result.fixed).toBeGreaterThanOrEqual(1);
+  });
+
   it('restore op: original (op.dest_path) present and op.quarantine_path absent → completed', async () => {
     const restoreDest = join(dir, 'restored.jpg');
     writeFileSync(restoreDest, 'restored-content');

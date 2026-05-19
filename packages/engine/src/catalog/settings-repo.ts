@@ -5,7 +5,7 @@ import {
   defaultThrottleProfiles,
   type Settings,
 } from '@fileorganizer/shared';
-import { SettingsSchema } from '../api/validators.js';
+import { SettingsSchema } from './settings-schema.js';
 
 const KEY = 'settings';
 
