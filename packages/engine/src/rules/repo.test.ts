@@ -100,6 +100,34 @@ describe('RulesRepo', () => {
     expect(repo.findById(created.id)!.name).toBe('renamed');
   });
 
+  it('populates created_at on insert (does not rely on the migration default)', () => {
+    // Regression for the Windows-only failure where migration 0007's
+    // DEFAULT CURRENT_TIMESTAMP was rejected by stricter SQLite builds.
+    // The current contract is: RulesRepo.create() always supplies a real
+    // timestamp explicitly, so the row's created_at is never the empty
+    // placeholder left by the migration's constant default.
+    const repo = new RulesRepo(db);
+    const before = Date.now();
+    const rule = repo.create({
+      name: 'has timestamp',
+      priority: 100,
+      match: {},
+      destinationRole: 'misc',
+      destinationTemplate: '{filename}',
+      movePolicy: 'always-review',
+      quarantinePolicy: 'default',
+    });
+    const after = Date.now();
+
+    const row = db
+      .prepare(`SELECT created_at FROM rules WHERE id = ?`)
+      .get(rule.id) as { created_at: string };
+    expect(row.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+    const insertedAt = Date.parse(row.created_at);
+    expect(insertedAt).toBeGreaterThanOrEqual(before);
+    expect(insertedAt).toBeLessThanOrEqual(after);
+  });
+
   it('deletes a rule', () => {
     const repo = new RulesRepo(db);
     const r = repo.create({

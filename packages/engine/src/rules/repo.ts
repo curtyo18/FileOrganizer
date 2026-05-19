@@ -20,10 +20,13 @@ export class RulesRepo {
 
   create(input: CreateRuleInput): Rule {
     const id = randomUUID();
+    // created_at is supplied explicitly rather than via SQL DEFAULT —
+    // migration 0007's placeholder default ('') is unobservable in
+    // practice because every insert lands a real timestamp here.
     this.db
       .prepare(
-        `INSERT INTO rules (id, name, priority, enabled, match_json, destination_role, destination_template, move_policy, quarantine_policy)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO rules (id, name, priority, enabled, match_json, destination_role, destination_template, move_policy, quarantine_policy, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -35,6 +38,7 @@ export class RulesRepo {
         input.destinationTemplate,
         input.movePolicy,
         input.quarantinePolicy,
+        new Date().toISOString(),
       );
     return this.findById(id)!;
   }
